@@ -1,0 +1,42 @@
+
+##### PREPARING THE ENVIRONMENT ######
+- commands to install a working miniconda with cuda12:
+/condapath/bin/conda create --name tensorflow python=3.11
+. /condapath/bin/activate tensorflow
+conda install -c conda-forge mamba
+mamba install -c conda-forge tensorflow-gpu ipython jupyter chex dask xarray dm-tree scipy shapely matplotlib cartopy
+python -m pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+python -m pip install git+https://github.com/deepmind/jaxline
+python -m pip install jraph
+python -m pip install google-cloud-storage
+python -m pip install trimesh[easy]
+######################################
+
+
+- graphcast.ModelConfig: contains the condifugations of the model, noticeably:
+    resolution: The resolution of the data, in degrees (e.g. 0.25 or 1.0).
+    mesh_size: How many refinements to do on the multi-mesh.
+    gnn_msg_steps: How many Graph Network message passing steps to do.
+    latent_size: How many latent features to include in the various MLPs.
+    hidden_layers: How many hidden layers for each MLP.
+    radius_query_fraction_edge_length: Scalar that will be multiplied by the
+        length of the longest edge of the finest mesh to define the radius of
+        connectivity to use in the Grid2Mesh graph. Reasonable values are
+        between 0.6 and 1. 0.6 reduces the number of grid points feeding into
+        multiple mesh nodes and therefore reduces edge count and memory use, but
+        1 gives better predictions.
+    mesh2grid_edge_normalization_factor: Allows explicitly controlling edge
+        normalization for mesh2grid edges. If None, defaults to max edge length.
+        This supports using pre-trained model weights with a different graph
+        structure to what it was trained on.
+
+- graphcast.TaskConfig: Defines inputs and targets on which a model is trained and/or evaluated
+
+
+input data: they are organized in a netcdf.
+The variables have 4 or 5 dimensions: (batch, time, lat, lon) or (batch, time, level, lat, lon)
+
+
+
+message Time-dependent input variable temperature must either be a forcing variable, or a target variable to allow for auto-regressive feedback.
+some variables must be target variables because they are used as both input and output
