@@ -13,6 +13,9 @@ python -m pip install trimesh[easy]
 ######################################
 
 
+- architecture is based on JAX/Optax, not on tensorflow
+
+
 - graphcast.ModelConfig: contains the condifugations of the model, noticeably:
     resolution: The resolution of the data, in degrees (e.g. 0.25 or 1.0).
     mesh_size: How many refinements to do on the multi-mesh.
@@ -40,3 +43,27 @@ The variables have 4 or 5 dimensions: (batch, time, lat, lon) or (batch, time, l
 
 message Time-dependent input variable temperature must either be a forcing variable, or a target variable to allow for auto-regressive feedback.
 some variables must be target variables because they are used as both input and output
+
+
+
+##############################
+#### TRAINING ################
+##############################
+
+The training loop is missing from the jupyter notebook.
+
+in the script graphcast_demo_menta.py provides a working training loop for a small case.
+
+In general graphcast is trained on the whole ERA5 for each epoch, using a batch size of 32 time steps.
+
+#############################
+
+
+
+###########################################
+#### Memory use and velocity ##############
+###########################################
+
+- latent_size: The use of memory is very sensitive to the parameter latent_size. If latent_size=512 the system explodes in my pc. if it is 256 it works.
+- XLA_PYTHON_CLIENT_ALLOCATOR=platform : this environment variable makes the system a bit slower, but deallocates the memory from the GPU when the variables are deleted, helping reducing the amount of memory required. The instruction os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform" at the beginning of the script does the job
+

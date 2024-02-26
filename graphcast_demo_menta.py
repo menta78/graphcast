@@ -1,10 +1,11 @@
-import os
+import os, time
 import pickle as pkl
 import dataclasses
 import datetime
 import functools
 import math
 import re
+import gc
 from typing import Optional
 
 import cartopy.crs as ccrs
@@ -21,12 +22,15 @@ from graphcast import xarray_tree
 from IPython.display import HTML
 import ipywidgets as widgets
 import haiku as hk
-import jax
+import jax, optax
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import animation
 import numpy as np
 import xarray
+
+# should ensure that memory is deallocated when the buffers are released in the GPU
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 
 def parse_file_parts(file_name):
@@ -52,7 +56,7 @@ print("creating/loading model_config and task_config")
 # pkl.dump(params, fl)
 
 # very coarse model to test on my laptop
-model_config = graphcast.ModelConfig(resolution=3.0, mesh_size=2, latent_size=256, gnn_msg_steps=16, hidden_layers=1, 
+model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=256, gnn_msg_steps=16, hidden_layers=1, 
         radius_query_fraction_edge_length=0.6, mesh2grid_edge_normalization_factor=0.6180338738074472)
 
 task_config = graphcast.TaskConfig(
@@ -64,7 +68,7 @@ task_config = graphcast.TaskConfig(
                 'total_precipitation_6hr', 'temperature', 'geopotential', 'u_component_of_wind', 'v_component_of_wind', 
                 'vertical_velocity', 'specific_humidity'), 
               forcing_variables=('toa_incident_solar_radiation', 'year_progress_sin', 'year_progress_cos', 'day_progress_sin', 'day_progress_cos'), 
-              pressure_levels=(50, 150, 300, 600), 
+              pressure_levels=(50, 300, 600, 1000), 
               input_duration='12h')
 
 params = None # params must be initialized
@@ -181,15 +185,25 @@ def loss_fn(model_config, task_config, inputs, targets, forcings):
       lambda x: xarray_jax.unwrap_data(x.mean(), require_jax=True),
       (loss, diagnostics))
 
-def grads_fn(params, state, model_config, task_config, inputs, targets, forcings):
-  def _aux(params, state, i, t, f):
-    (loss, diagnostics), next_state = loss_fn.apply(
-        params, state, jax.random.PRNGKey(0), model_config, task_config,
-        i, t, f)
-    return loss, (diagnostics, next_state)
-  (loss, (diagnostics, next_state)), grads = jax.value_and_grad(
-      _aux, has_aux=True)(params, state, inputs, targets, forcings)
-  return loss, diagnostics, next_state, grads
+#def grads_fn(params, state, model_config, task_config, inputs, targets, forcings):
+#  def _aux(params, state, i, t, f):
+#    (loss, diagnostics), next_state = loss_fn.apply(
+#        params, state, jax.random.PRNGKey(0), model_config, task_config,
+#        i, t, f)
+#    return loss, (diagnostics, next_state)
+#  (loss, (diagnostics, next_state)), grads = jax.value_and_grad(
+#      _aux, has_aux=True)(params, state, inputs, targets, forcings)
+#  return loss, diagnostics, next_state, grads
+
+def grads_fn(params, state, inputs, targets, forcings, model_config, task_config):
+    def _aux(params, state, i, t, f):
+        (loss, diagnostics), next_state = loss_fn.apply(
+                params, state, jax.random.PRNGKey(0), model_config, task_config, 
+                i, t, f)
+        return loss, (diagnostics, next_state)
+    (loss, (diagnostics, next_state)), grads = jax.value_and_grad(
+            _aux, has_aux=True)(params, state, inputs, targets, forcings)
+    return loss, diagnostics, next_state, grads
 
 # Jax doesn't seem to like passing configs as args through the jit. Passing it
 # in via partial (instead of capture by closure) forces jax to invalidate the
@@ -222,32 +236,30 @@ print("training")
 
 print("  getting the functions for computing the loss, the backpropagation, the forward step")
 loss_fn_jitted = drop_state(with_params(jax.jit(with_configs(loss_fn.apply))))
-grads_fn_jitted = with_params(jax.jit(with_configs(grads_fn)))
+grads_fn_jitted = jax.jit(with_configs(grads_fn))
 run_forward_jitted = drop_state(with_params(jax.jit(with_configs(
     run_forward.apply))))
 
-print("  computing the loss")
-# @title Loss computation (autoregressive loss over multiple steps)
-loss, diagnostics = loss_fn_jitted(
-    rng=jax.random.PRNGKey(0),
-    inputs=train_inputs,
-    targets=train_targets,
-    forcings=train_forcings)
-print("Loss:", float(loss))
+print("  creating the optimizer")
+lr = 1e-3
+optimiser = optax.adam(lr, b1=0.9, b2=0.999, eps=1e-8)
+opt_state = optimiser.init(params)
 
-print("  backpropagation")
-# @title Gradient computation (backprop through time)
-loss, diagnostics, next_state, grads = grads_fn_jitted(
-    inputs=train_inputs,
-    targets=train_targets,
-    forcings=train_forcings)
-mean_grad = np.mean(jax.tree_util.tree_flatten(jax.tree_util.tree_map(lambda x: np.abs(x).mean(), grads))[0])
-print(f"Loss: {loss:.4f}, Mean |grad|: {mean_grad:.6f}")
+# training loop
+nepochs = 10
+for iepoch in range(nepochs):
+    print(f"epoch {iepoch}")
+    ## @title Gradient computation (backprop through time)
+    loss, diagnostics, next_state, grads = grads_fn_jitted(params, state, train_inputs, train_targets, train_forcings)
+    
+    # optimizer step
+    updates, opt_state = optimiser.update(grads, opt_state)
+    params = optax.apply_updates(params, updates)
+    
+    mean_grad = np.mean(jax.tree_util.tree_flatten(jax.tree_util.tree_map(lambda x: np.abs(x).mean(), grads))[0])
 
-print("Inputs:  ", train_inputs.dims.mapping)
-print("Targets: ", train_targets.dims.mapping)
-print("Forcings:", train_forcings.dims.mapping)
-
+    print(f"Loss: {loss:.4f}, Mean |grad|: {mean_grad:.6f}")
+    
 print("  autoregressive rollout (forward step)")
 # @title Autoregressive rollout (keep the loop in JAX)
 predictions = run_forward_jitted(
@@ -255,5 +267,15 @@ predictions = run_forward_jitted(
     inputs=train_inputs,
     targets_template=train_targets * np.nan,
     forcings=train_forcings)
-import pdb; pdb.set_trace()
+
 predictions
+    
+print("Inputs:  ", train_inputs.dims.mapping)
+print("Targets: ", train_targets.dims.mapping)
+print("Forcings:", train_forcings.dims.mapping)
+
+
+
+# setup optimiser
+
+
