@@ -9,7 +9,6 @@ import gc
 from typing import Optional
 
 import cartopy.crs as ccrs
-from google.cloud import storage
 from graphcast import autoregressive
 from graphcast import casting
 from graphcast import checkpoint
@@ -39,37 +38,20 @@ def parse_file_parts(file_name):
 
 # @title Authenticate with Google Cloud Storage
 
-#gcs_client = storage.Client.create_anonymous_client()
-#gcs_bucket = gcs_client.get_bucket("dm_graphcast")
-
 
 
 print("creating/loading model_config and task_config")
-
-# gcsParamsFile = "params/GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
-# with gcs_bucket.blob(gcsParamsFile).open("rb") as f:
-#   ckpt = checkpoint.load(f, graphcast.CheckPoint)
-# model_config = ckpt.model_config
-# task_config = ckpt.task_config
-# params = ckpt.params
-# fl = open("params.pkl", "wb")
-# pkl.dump(params, fl)
 
 # very coarse model to test on my laptop
 model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=256, gnn_msg_steps=16, hidden_layers=1, 
         radius_query_fraction_edge_length=0.6, mesh2grid_edge_normalization_factor=0.6180338738074472)
 
 task_config = graphcast.TaskConfig(
-                input_variables=('2m_temperature', 'mean_sea_level_pressure', '10m_v_component_of_wind', 
-                '10m_u_component_of_wind', 'total_precipitation_6hr', 'temperature', 'geopotential', 
-                'u_component_of_wind', 'v_component_of_wind', 'vertical_velocity', 'specific_humidity', 'toa_incident_solar_radiation', 
-                'year_progress_sin', 'year_progress_cos', 'day_progress_sin', 'day_progress_cos', 'geopotential_at_surface', 'land_sea_mask'), 
-                target_variables=('2m_temperature', 'mean_sea_level_pressure', '10m_v_component_of_wind', '10m_u_component_of_wind', 
-                'total_precipitation_6hr', 'temperature', 'geopotential', 'u_component_of_wind', 'v_component_of_wind', 
-                'vertical_velocity', 'specific_humidity'), 
-              forcing_variables=('toa_incident_solar_radiation', 'year_progress_sin', 'year_progress_cos', 'day_progress_sin', 'day_progress_cos'), 
-              pressure_levels=(50, 300, 600, 1000), 
-              input_duration='12h')
+                input_variables=['hs'], 
+                target_variables=['hs'], 
+              forcing_variables=('u10', 'v10'),
+              pressure_levels=[0], 
+              input_duration='6h')
 
 params = None # params must be initialized
 # fl = open("params.pkl", "rb")
@@ -81,47 +63,25 @@ state = {}
 
 print("loading the training data")
 
-datadir = "./data"
+datadir = "./data/graphcastWavesExample/"
 os.system(f"mkdir {datadir}")
 
 # the variables of this file have 4 or 5 dimensions: (batch, time, lat, lon) or (batch, time, level, lat, lon)
-exampleBatchFileName = "source-era5_date-2022-01-01_res-1.0_levels-13_steps-12.nc"
+exampleBatchFileName = "waves200912_1batch.nc"
 exampleBatchFilePath = os.path.join(datadir, exampleBatchFileName)
-if not os.path.isfile(exampleBatchFilePath):
-    gcsFName = f"dataset/{exampleBatchFileName}"
-    blob = gcs_bucket.blob(gcsFName)
-    f = blob.open("rb")
-    example_batch = xarray.load_dataset(f).compute()
-    example_batch.to_netcdf(exampleBatchFilePath)
-else:
-    example_batch = xarray.open_dataset(exampleBatchFilePath)
+example_batch = xarray.open_dataset(exampleBatchFilePath)
 
 diffStddevByLevelFileName = "diffs_stddev_by_level.nc"
 diffStddevByLevelFilePath = os.path.join(datadir, diffStddevByLevelFileName)
-if not os.path.isfile(diffStddevByLevelFilePath):
-    with gcs_bucket.blob(f"stats/{diffStddevByLevelFileName}").open("rb") as f:
-        diffs_stddev_by_level = xarray.load_dataset(f).compute()
-        diffs_stddev_by_level.to_netcdf(diffStddevByLevelFilePath)
-else:
-    diffs_stddev_by_level = xarray.open_dataset(diffStddevByLevelFilePath)
+diffs_stddev_by_level = xarray.open_dataset(diffStddevByLevelFilePath)
 
 meanByLevelFileName = "mean_by_level.nc"
 meanByLevelFilePath = os.path.join(datadir, meanByLevelFileName)
-if not os.path.isfile(meanByLevelFilePath):
-    with gcs_bucket.blob(f"stats/{meanByLevelFileName}").open("rb") as f:
-        mean_by_level = xarray.load_dataset(f).compute()
-        mean_by_level.to_netcdf(meanByLevelFilePath)
-else:
-    mean_by_level = xarray.open_dataset(meanByLevelFilePath)
+mean_by_level = xarray.open_dataset(meanByLevelFilePath)
 
 stddevByLevelFileName = 'stddev_by_level.nc'
 stddevByLevelFilePath = os.path.join(datadir, stddevByLevelFileName)
-if not os.path.isfile(stddevByLevelFilePath):
-    with gcs_bucket.blob(f"stats/{stddevByLevelFileName}").open("rb") as f:
-        stddev_by_level = xarray.load_dataset(f).compute()
-        stddev_by_level.to_netcdf(stddevByLevelFilePath)
-else:
-    stddev_by_level = xarray.open_dataset(stddevByLevelFilePath)
+stddev_by_level = xarray.open_dataset(stddevByLevelFilePath)
 
 
 
@@ -135,12 +95,6 @@ train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_
 eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
     example_batch, target_lead_times=slice("60h", "72h"),
     **dataclasses.asdict(task_config))
-
-
-
-
-
-
 
 
 

@@ -400,18 +400,18 @@ class GraphCast(predictor_base.Predictor):
     loss = losses.weighted_mse_per_level(
         predictions, targets,
         per_variable_weights={
-            # Any variables not specified here are weighted as 1.0.
-            # A single-level variable, but an important headline variable
-            # and also one which we have struggled to get good performance
-            # on at short lead times, so leaving it weighted at 1.0, equal
-            # to the multi-level variables:
-            "2m_temperature": 1.0,
-            # New single-level variables, which we don't weight too highly
-            # to avoid hurting performance on other variables.
-            "10m_u_component_of_wind": 0.1,
-            "10m_v_component_of_wind": 0.1,
-            "mean_sea_level_pressure": 0.1,
-            "total_precipitation_6hr": 0.1,
+          # # Any variables not specified here are weighted as 1.0.
+          # # A single-level variable, but an important headline variable
+          # # and also one which we have struggled to get good performance
+          # # on at short lead times, so leaving it weighted at 1.0, equal
+          # # to the multi-level variables:
+          # "2m_temperature": 1.0,
+          # # New single-level variables, which we don't weight too highly
+          # # to avoid hurting performance on other variables.
+          # "10m_u_component_of_wind": 0.1,
+          # "10m_v_component_of_wind": 0.1,
+          # "mean_sea_level_pressure": 0.1,
+          # "total_precipitation_6hr": 0.1,
         })
     return loss, predictions  # pytype: disable=bad-return-type  # jax-ndarray
 
