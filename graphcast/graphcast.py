@@ -36,6 +36,7 @@ from graphcast import model_utils
 from graphcast import predictor_base
 from graphcast import typed_graph
 from graphcast import xarray_jax
+from graphcast import maskManager
 import jax.numpy as jnp
 import jraph
 import numpy as np
@@ -193,7 +194,8 @@ class ModelConfig:
         structure to what it was trained on.
   """
   resolution: float
-  mesh_size: int
+  ico_mesh_minlev: int
+  ico_mesh_maxlev: int
   latent_size: int
   gnn_msg_steps: int
   hidden_layers: int
@@ -254,7 +256,8 @@ class GraphCast(predictor_base.Predictor):
     # Specification of the multimesh.
     self._meshes = (
         icosahedral_mesh.get_hierarchy_of_triangular_meshes_for_sphere(
-            splits=model_config.mesh_size))
+            splits=model_config.ico_mesh_maxlev))
+    self._meshes = self._meshes[model_config.ico_mesh_minlev:]
 
     # Encoder, which moves data from the grid to the mesh with a single message
     # passing step.
@@ -350,6 +353,8 @@ class GraphCast(predictor_base.Predictor):
     self._mesh_graph_structure = None
     self._mesh2grid_graph_structure = None
 
+    self._mask_manager = maskManager.MaskManager()
+
   @property
   def _finest_mesh(self):
     return self._meshes[-1]
@@ -426,7 +431,9 @@ class GraphCast(predictor_base.Predictor):
 
   def _maybe_init(self, sample_inputs: xarray.Dataset):
     """Inits everything that has a dependency on the input coordinates."""
+    import pdb; pdb.set_trace()
     if not self._initialized:
+      self._mask_manager.initialize()
       self._init_mesh_properties()
       self._init_grid_properties(
           grid_lat=sample_inputs.lat, grid_lon=sample_inputs.lon)
@@ -438,6 +445,7 @@ class GraphCast(predictor_base.Predictor):
 
   def _init_mesh_properties(self):
     """Inits static properties that have to do with mesh nodes."""
+    self._meshes = self._mask_manager.pruneMaskedIcosahedronVrtx(self._meshes)
     self._num_mesh_nodes = self._finest_mesh.vertices.shape[0]
     mesh_phi, mesh_theta = model_utils.cartesian_to_spherical(
         self._finest_mesh.vertices[:, 0],
@@ -456,13 +464,14 @@ class GraphCast(predictor_base.Predictor):
     """Inits static properties that have to do with grid nodes."""
     self._grid_lat = grid_lat.astype(np.float32)
     self._grid_lon = grid_lon.astype(np.float32)
-    # Initialized the counters.
-    self._num_grid_nodes = grid_lat.shape[0] * grid_lon.shape[0]
 
     # Initialize lat and lon for the grid.
     grid_nodes_lon, grid_nodes_lat = np.meshgrid(grid_lon, grid_lat)
     self._grid_nodes_lon = grid_nodes_lon.reshape([-1]).astype(np.float32)
     self._grid_nodes_lat = grid_nodes_lat.reshape([-1]).astype(np.float32)
+    self._grid_nodes_lat, self._grid_nodes_lon = self._mask_manager.pruneMaskedGridNodes(
+            self._grid_nodes_lat, self._grid_nodes_lon)
+    self._num_grid_nodes = len(self._grid_nodes_lat)
 
   def _init_grid2mesh_graph(self) -> typed_graph.TypedGraph:
     """Build Grid2Mesh graph."""

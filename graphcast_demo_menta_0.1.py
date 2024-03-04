@@ -43,11 +43,11 @@ def parse_file_parts(file_name):
 print("creating/loading model_config and task_config")
 
 # very coarse model to test on my laptop
-model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=256, gnn_msg_steps=16, hidden_layers=1, 
+model_config = graphcast.ModelConfig(resolution=1.0, ico_mesh_minlev=2, ico_mesh_maxlev=5, latent_size=256, gnn_msg_steps=16, hidden_layers=1, 
         radius_query_fraction_edge_length=0.6, mesh2grid_edge_normalization_factor=0.6180338738074472)
 
 task_config = graphcast.TaskConfig(
-                input_variables=['hs'], 
+                input_variables=['u10', 'v10', 'hs'], 
                 target_variables=['hs'], 
               forcing_variables=('u10', 'v10'),
               pressure_levels=[0], 
