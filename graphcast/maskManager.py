@@ -38,10 +38,16 @@ class MaskManager:
             nfaces = len(faces)
             invrng = range(nfaces-1,-1,-1)
             for iface in invrng:
-                if ivrt in faces[iface]:
+                fci = faces[iface]
+                if ivrt in fci:
                     faces.pop(iface)
+                else:
+                    for ivtfci in [0,1,2]:
+                        if fci[ivtfci] > ivrt:
+                            fci[ivtfci] -= 1
 
-        for ivrt, vrt3d in zip(range(nvrt), mesh.vertices):
+        for ivrt in range(nvrt):
+            vrt3d = mesh.vertices[ivrt]
             sc1, sc2 = model_utils.cartesian_to_spherical(vrt3d[0], vrt3d[1], vrt3d[2])
             lat, lon = model_utils.spherical_to_lat_lon(sc1, sc2)
             if self.isMasked(lat, lon):
@@ -50,11 +56,11 @@ class MaskManager:
                 vertices.append(vrt3d)
         vertices = np.array(vertices)
         faces = np.array(faces)
-        msh = TriangularMesh(
+        mshout = TriangularMesh(
                 vertices=vertices,
                 faces=faces
                 )
-        return msh
+        return mshout
 
     def pruneMaskedIcosahedronVrtx(self, meshes: list) -> list:
         rslt = []
