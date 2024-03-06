@@ -466,7 +466,6 @@ def get_bipartite_graph_spatial_features(
   edge_features = []
 
   if add_relative_positions:
-
     relative_position = get_bipartite_relative_position_in_receiver_local_coordinates(  # pylint: disable=line-too-long
         senders_node_phi=senders_node_phi,
         senders_node_theta=senders_node_theta,

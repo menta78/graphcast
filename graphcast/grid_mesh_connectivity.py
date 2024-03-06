@@ -20,13 +20,12 @@ import trimesh
 
 
 def _grid_lat_lon_to_coordinates(
-    grid_latitude: np.ndarray, grid_longitude: np.ndarray) -> np.ndarray:
+    grid_nodes_latitude: np.ndarray, grid_nodes_longitude: np.ndarray) -> np.ndarray:
   """Lat [num_lat] lon [num_lon] to 3d coordinates [num_lat, num_lon, 3]."""
   # Convert to spherical coordinates phi and theta defined in the grid.
   # Each [num_latitude_points, num_longitude_points]
-  phi_grid, theta_grid = np.meshgrid(
-      np.deg2rad(grid_longitude),
-      np.deg2rad(90 - grid_latitude))
+  phi_grid = np.deg2rad(grid_nodes_longitude)
+  theta_grid = np.deg2rad(90 - grid_nodes_latitude)
 
   # [num_latitude_points, num_longitude_points, 3]
   # Note this assumes unit radius, since for now we model the earth as a
@@ -39,15 +38,15 @@ def _grid_lat_lon_to_coordinates(
 
 def radius_query_indices(
     *,
-    grid_latitude: np.ndarray,
-    grid_longitude: np.ndarray,
+    grid_nodes_latitude: np.ndarray,
+    grid_nodes_longitude: np.ndarray,
     mesh: icosahedral_mesh.TriangularMesh,
     radius: float) -> tuple[np.ndarray, np.ndarray]:
   """Returns mesh-grid edge indices for radius query.
 
   Args:
-    grid_latitude: Latitude values for the grid [num_lat_points]
-    grid_longitude: Longitude values for the grid [num_lon_points]
+    grid_nodes_latitude: Latitude values for the grid [num_points on land]
+    grid_nodes_longitude: Longitude values for the grid [num_points on land]
     mesh: Mesh object.
     radius: Radius of connectivity in R3. for a sphere of unit radius.
 
@@ -62,7 +61,7 @@ def radius_query_indices(
 
   # [num_grid_points=num_lat_points * num_lon_points, 3]
   grid_positions = _grid_lat_lon_to_coordinates(
-      grid_latitude, grid_longitude).reshape([-1, 3])
+      grid_nodes_latitude, grid_nodes_longitude)
 
   # [num_mesh_points, 3]
   mesh_positions = mesh.vertices
@@ -88,14 +87,14 @@ def radius_query_indices(
 
 def in_mesh_triangle_indices(
     *,
-    grid_latitude: np.ndarray,
-    grid_longitude: np.ndarray,
+    grid_nodes_latitude: np.ndarray,
+    grid_nodes_longitude: np.ndarray,
     mesh: icosahedral_mesh.TriangularMesh) -> tuple[np.ndarray, np.ndarray]:
   """Returns mesh-grid edge indices for grid points contained in mesh triangles.
 
   Args:
-    grid_latitude: Latitude values for the grid [num_lat_points]
-    grid_longitude: Longitude values for the grid [num_lon_points]
+    grid_nodes_latitude: Latitude values for the grid [num_lat_points]
+    grid_nodes_longitude: Longitude values for the grid [num_lon_points]
     mesh: Mesh object.
 
   Returns:
@@ -109,7 +108,7 @@ def in_mesh_triangle_indices(
 
   # [num_grid_points=num_lat_points * num_lon_points, 3]
   grid_positions = _grid_lat_lon_to_coordinates(
-      grid_latitude, grid_longitude).reshape([-1, 3])
+      grid_nodes_latitude, grid_nodes_longitude).reshape([-1, 3])
 
   mesh_trimesh = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces)
 

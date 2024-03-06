@@ -431,7 +431,6 @@ class GraphCast(predictor_base.Predictor):
 
   def _maybe_init(self, sample_inputs: xarray.Dataset):
     """Inits everything that has a dependency on the input coordinates."""
-    import pdb; pdb.set_trace()
     if not self._initialized:
       self._mask_manager.initialize()
       self._init_mesh_properties()
@@ -462,8 +461,8 @@ class GraphCast(predictor_base.Predictor):
 
   def _init_grid_properties(self, grid_lat: np.ndarray, grid_lon: np.ndarray):
     """Inits static properties that have to do with grid nodes."""
-    self._grid_lat = grid_lat.astype(np.float32)
-    self._grid_lon = grid_lon.astype(np.float32)
+   #self._grid_lat = grid_lat.astype(np.float32)
+   #self._grid_lon = grid_lon.astype(np.float32)
 
     # Initialize lat and lon for the grid.
     grid_nodes_lon, grid_nodes_lat = np.meshgrid(grid_lon, grid_lat)
@@ -477,10 +476,10 @@ class GraphCast(predictor_base.Predictor):
     """Build Grid2Mesh graph."""
 
     # Create some edges according to distance between mesh and grid nodes.
-    assert self._grid_lat is not None and self._grid_lon is not None
+    assert self._grid_nodes_lat is not None and self._grid_nodes_lon is not None
     (grid_indices, mesh_indices) = grid_mesh_connectivity.radius_query_indices(
-        grid_latitude=self._grid_lat,
-        grid_longitude=self._grid_lon,
+        grid_nodes_latitude=self._grid_nodes_lat,
+        grid_nodes_longitude=self._grid_nodes_lon,
         mesh=self._finest_mesh,
         radius=self._query_radius)
 
@@ -571,8 +570,8 @@ class GraphCast(predictor_base.Predictor):
     # mesh triangles.
     (grid_indices,
      mesh_indices) = grid_mesh_connectivity.in_mesh_triangle_indices(
-         grid_latitude=self._grid_lat,
-         grid_longitude=self._grid_lon,
+         grid_nodes_latitude=self._grid_nodes_lat,
+         grid_nodes_longitude=self._grid_nodes_lon,
          mesh=self._finest_mesh)
 
     # Edges sending info from mesh to grid.

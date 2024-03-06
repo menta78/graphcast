@@ -46,7 +46,7 @@ class MaskManager:
                         if fci[ivtfci] > ivrt:
                             fci[ivtfci] -= 1
 
-        for ivrt in range(nvrt):
+        for ivrt in range(nvrt-1,-1,-1):
             vrt3d = mesh.vertices[ivrt]
             sc1, sc2 = model_utils.cartesian_to_spherical(vrt3d[0], vrt3d[1], vrt3d[2])
             lat, lon = model_utils.spherical_to_lat_lon(sc1, sc2)
@@ -54,7 +54,7 @@ class MaskManager:
                 pruneFacesWithVertex(ivrt)
             else:
                 vertices.append(vrt3d)
-        vertices = np.array(vertices)
+        vertices = np.array(vertices)[::-1]
         faces = np.array(faces)
         mshout = TriangularMesh(
                 vertices=vertices,
