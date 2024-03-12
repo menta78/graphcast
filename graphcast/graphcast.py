@@ -754,7 +754,11 @@ class GraphCast(predictor_base.Predictor):
     # xarray `Dataset` (batch, time, lat, lon, level, multiple vars)
     # to xarray `DataArray` (batch, lat, lon, channels)
     stacked_inputs = model_utils.dataset_to_stacked(inputs)
+    stacked_inputs = self._mask_manager.maskFlatGriddedDataset(
+            stacked_inputs)
     stacked_forcings = model_utils.dataset_to_stacked(forcings)
+    stacked_forcings = self._mask_manager.maskFlatGriddedDataset(
+            stacked_forcings)
     stacked_inputs = xarray.concat(
         [stacked_inputs, stacked_forcings], dim="channels")
 
@@ -762,8 +766,7 @@ class GraphCast(predictor_base.Predictor):
     # to single numpy array with shape [lat_lon_node, batch, channels]
     grid_xarray_lat_lon_leading = model_utils.lat_lon_to_leading_axes(
         stacked_inputs)
-    return xarray_jax.unwrap(grid_xarray_lat_lon_leading.data).reshape(
-        (-1,) + grid_xarray_lat_lon_leading.data.shape[2:])
+    return xarray_jax.unwrap(grid_xarray_lat_lon_leading.data)
 
   def _grid_node_outputs_to_prediction(
       self,
@@ -774,14 +777,11 @@ class GraphCast(predictor_base.Predictor):
 
     # numpy array with shape [lat_lon_node, batch, channels]
     # to xarray `DataArray` (batch, lat, lon, channels)
-    assert self._grid_lat is not None and self._grid_lon is not None
-    grid_shape = (self._grid_lat.shape[0], self._grid_lon.shape[0])
-    grid_outputs_lat_lon_leading = grid_node_outputs.reshape(
-        grid_shape + grid_node_outputs.shape[1:])
-    dims = ("lat", "lon", "batch", "channels")
-    grid_xarray_lat_lon_leading = xarray_jax.DataArray(
-        data=grid_outputs_lat_lon_leading,
-        dims=dims)
+   #grid_outputs_lat_lon_leading = grid_node_outputs.reshape(
+   #    grid_shape + grid_node_outputs.shape[1:])
+    grid_xarray_flatten = self._mask_manager.reCreateFlattenDataset(grid_node_outputs)
+    grid_xarray_lat_lon_leading = self._mask_manager.maskUnflatGriddedDataset(
+            grid_xarray_flatten)
     grid_xarray = model_utils.restore_leading_axes(grid_xarray_lat_lon_leading)
 
     # xarray `DataArray` (batch, lat, lon, channels)

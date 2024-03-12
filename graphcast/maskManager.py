@@ -1,7 +1,9 @@
 import numpy as np
 import xarray as xr
+from jax import numpy as jnp
 from graphcast.icosahedral_mesh import TriangularMesh
 from graphcast import model_utils
+from graphcast import xarray_jax
 
 
 class MaskManager:
@@ -76,6 +78,69 @@ class MaskManager:
                 outgridlat.append(lat)
                 outgridlon.append(lon)
         return np.array(outgridlat), np.array(outgridlon)
+
+    def _getInvMaskAsXarrayDataset(self) -> xr.DataArray:
+        msk = xr.DataArray(dims=('lat', 'lon'),
+                           coords=dict(lat=self.lat, lon=self.lon),
+                           data=~self.gridMsk)
+        return msk.stack(dict(lat_lon_node=('lat', 'lon')))
+
+    def maskFlatGriddedDataset(self, ds: xr.Dataset) -> xr.Dataset:
+        dsgrp = ds.stack(dict(lat_lon_node=('lat', 'lon')))
+        dimstrnsp = list(dsgrp.dims)
+        dimstrnsp.remove('lat_lon_node')
+        dimstrnsp.insert(0, 'lat_lon_node')
+        dsgrptrnsp = dsgrp.transpose(*dimstrnsp)
+
+        msk = self._getInvMaskAsXarrayDataset()
+
+        dsmsktrnsp = dsgrptrnsp[msk]
+        dims = list(dsgrp.dims)
+        rslt = dsmsktrnsp.transpose(*dims)
+        self.maskFlatLat = rslt.lat.values
+        self.maskFlatLon = rslt.lon.values
+        self.maskFlatLatLonNode = rslt.lat_lon_node.values
+        return rslt
+
+    def reCreateFlattenDataset(self, data):
+        dims = ("lat_lon_node", "batch", "channels")
+        return xarray_jax.DataArray(
+            data=data,
+            dims=dims,
+            coords=dict(lat_lon_node=self.maskFlatLatLonNode))
+
+
+    def maskUnflatGriddedDataset(self, vrbl: xr.DataArray) -> xr.DataArray:
+        assert vrbl.dims.index('lat_lon_node') == 0, "maskUnflatGriddedDataset: lat_lon_node must be the 1st dimension"
+
+        # getting the jax array of the input data
+        dt = xarray_jax.unwrap(vrbl.data)
+
+        # creating the jax array for the gridded results
+        nlat = len(self.lat)
+        nlon = len(self.lon)
+        shp0 = list(vrbl.shape)
+        shp = shp0.copy()
+        shp[0] = nlat
+        shp.insert(1, nlon)
+        vls = jnp.zeros(shp, dtype=jnp.bfloat16)*jnp.nan
+
+        # broadcasting the mask to its shape
+        expdim = [d for d in range(2, len(shp))]
+        msk_ = np.expand_dims(~self.gridMsk, expdim)
+        mskNd = np.broadcast_to(msk_, shp)
+
+        # setting the values to the grid
+        vls = vls.at[mskNd].set(dt.flatten())
+
+        # creating the output dataset
+        dims = list(vrbl.dims)
+        dims.remove('lat_lon_node')
+        dims.insert(0, 'lat')
+        dims.insert(1, 'lon')
+        vrunmsk = xarray_jax.DataArray(vls, dims=dims, coords=dict(lat=self.lat, lon=self.lon))
+        return vrunmsk
+
 
 
 

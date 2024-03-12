@@ -16,8 +16,10 @@
 from typing import Mapping
 
 from graphcast import xarray_tree
+from graphcast import xarray_jax
 import numpy as np
 from typing_extensions import Protocol
+from jax import numpy as jnp
 import xarray
 
 
@@ -60,7 +62,14 @@ def weighted_mse_per_level(
 ) -> LossAndDiagnostics:
   """Latitude- and pressure-level-weighted MSE loss."""
   def loss(prediction, target):
-    loss = (prediction - target)**2
+    pred = xarray_jax.unwrap(prediction.data)
+    targ = xarray_jax.unwrap(target.data)
+    cnd = jnp.isnan(pred)
+    pred = jnp.where(cnd, 0, pred)
+    cnd = jnp.isnan(targ)
+    targ = jnp.where(cnd, 0, targ)
+    lossjnp = (pred - targ)**2
+    loss = xarray_jax.DataArray(lossjnp, dims=prediction.dims, coords=prediction.coords)
     loss *= normalized_latitude_weights(target).astype(loss.dtype)
     if 'level' in target.dims:
       loss *= normalized_level_weights(target).astype(loss.dtype)

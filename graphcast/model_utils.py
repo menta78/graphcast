@@ -147,7 +147,7 @@ def lat_lon_to_leading_axes(
   # leading + ["lat", "lon"] + trailing
   # to
   # ["lat", "lon"] + leading + trailing
-  return grid_xarray.transpose("lat", "lon", ...)
+  return grid_xarray.transpose("lat_lon_node", ...)
 
 
 def restore_leading_axes(grid_xarray: xarray.DataArray) -> xarray.DataArray:
