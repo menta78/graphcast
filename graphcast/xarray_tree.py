@@ -57,10 +57,11 @@ def map_structure(func: Callable[..., Any], *structures: Any) -> Any:
     if all(isinstance(a, (type(None), xarray.DataArray))
            for a in data.values()):
       data_arrays = [v.rename(k) for k, v in data.items() if v is not None]
-      try:
-        return xarray.merge(data_arrays, join='exact')
-      except ValueError:  # Exact join not possible.
-        pass
+     #try:
+     #  return xarray.merge(data_arrays, join='exact')
+     #except ValueError:  # Exact join not possible.
+     #  pass
+      return xarray.merge(data_arrays, join='exact')
     return data
   if isinstance(first, dict):
     return {k: map_structure(func, *[s[k] for s in structures])

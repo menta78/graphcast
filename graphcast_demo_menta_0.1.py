@@ -50,7 +50,7 @@ task_config = graphcast.TaskConfig(
                 input_variables=['u10', 'v10', 'hs'], 
                 target_variables=['hs'], 
               forcing_variables=('u10', 'v10'),
-              pressure_levels=[0], 
+              pressure_levels=[10.], 
               input_duration='6h')
 
 params = None # params must be initialized
@@ -201,6 +201,7 @@ opt_state = optimiser.init(params)
 
 # training loop
 nepochs = 10
+nepochs = 2
 for iepoch in range(nepochs):
     print(f"epoch {iepoch}")
     ## @title Gradient computation (backprop through time)

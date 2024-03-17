@@ -123,7 +123,7 @@ class MaskManager:
         shp = shp0.copy()
         shp[0] = nlat
         shp.insert(1, nlon)
-        vls = jnp.zeros(shp, dtype=jnp.bfloat16)*jnp.nan
+        vls = jnp.zeros(shp, dtype=jnp.bfloat16)
 
         # broadcasting the mask to its shape
         expdim = [d for d in range(2, len(shp))]

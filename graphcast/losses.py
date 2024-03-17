@@ -20,10 +20,12 @@ from graphcast import xarray_jax
 import numpy as np
 from typing_extensions import Protocol
 from jax import numpy as jnp
+import jax
 import xarray
 
 
 LossAndDiagnostics = tuple[xarray.DataArray, xarray.Dataset]
+skipna_=True
 
 
 class LossFunction(Protocol):
@@ -62,17 +64,22 @@ def weighted_mse_per_level(
 ) -> LossAndDiagnostics:
   """Latitude- and pressure-level-weighted MSE loss."""
   def loss(prediction, target):
-    pred = xarray_jax.unwrap(prediction.data)
-    targ = xarray_jax.unwrap(target.data)
-    cnd = jnp.isnan(pred)
-    pred = jnp.where(cnd, 0, pred)
-    cnd = jnp.isnan(targ)
-    targ = jnp.where(cnd, 0, targ)
-    lossjnp = (pred - targ)**2
-    loss = xarray_jax.DataArray(lossjnp, dims=prediction.dims, coords=prediction.coords)
+  # pred = xarray_jax.unwrap(prediction.data)
+  # targ = xarray_jax.unwrap(target.data)
+  # cnd = jnp.isnan(pred)
+  # pred = jnp.where(cnd, 0, pred)
+  # cnd = jnp.isnan(targ)
+  # targ = jnp.where(cnd, 0, targ)
+  # lossjnp = (pred - targ)**2
+  # loss = xarray_jax.DataArray(lossjnp, dims=prediction.dims, coords=prediction.coords)
+    loss = (prediction - target)**2
+    lossjnp = xarray_jax.unwrap(loss.data)
+    maxloss = jnp.nanmax(lossjnp)
+    aaa = jnp.where(lossjnp==maxloss)
+    jax.debug.breakpoint()
     loss *= normalized_latitude_weights(target).astype(loss.dtype)
-    if 'level' in target.dims:
-      loss *= normalized_level_weights(target).astype(loss.dtype)
+   #if 'level' in target.dims:
+   #  loss *= normalized_level_weights(target).astype(loss.dtype)
     return _mean_preserving_batch(loss)
 
   losses = xarray_tree.map_structure(loss, predictions, targets)
@@ -80,7 +87,7 @@ def weighted_mse_per_level(
 
 
 def _mean_preserving_batch(x: xarray.DataArray) -> xarray.DataArray:
-  return x.mean([d for d in x.dims if d != 'batch'], skipna=False)
+  return x.mean([d for d in x.dims if d != 'batch'], skipna=skipna_)
 
 
 def sum_per_variable_losses(
@@ -99,14 +106,14 @@ def sum_per_variable_losses(
   }
   total = xarray.concat(
       weighted_per_variable_losses.values(), dim='variable', join='exact').sum(
-          'variable', skipna=False)
+          'variable', skipna=skipna_)
   return total, per_variable_losses  # pytype: disable=bad-return-type
 
 
 def normalized_level_weights(data: xarray.DataArray) -> xarray.DataArray:
   """Weights proportional to pressure at each level."""
   level = data.coords['level']
-  return level / level.mean(skipna=False)
+  return level / level.mean(skipna=skipna_)
 
 
 def normalized_latitude_weights(data: xarray.DataArray) -> xarray.DataArray:
@@ -153,7 +160,7 @@ def normalized_latitude_weights(data: xarray.DataArray) -> xarray.DataArray:
   else:
     weights = _weight_for_latitude_vector_without_poles(latitude)
 
-  return weights / weights.mean(skipna=False)
+  return weights / weights.mean(skipna=skipna_)
 
 
 def _weight_for_latitude_vector_without_poles(latitude):
