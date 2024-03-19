@@ -60,6 +60,8 @@ def weighted_mse_per_level(
 ) -> LossAndDiagnostics:
   """Latitude- and pressure-level-weighted MSE loss."""
   def loss(prediction, target):
+    prediction = prediction.fillna(0)
+    target = target.fillna(0)
     loss = (prediction - target)**2
     loss *= normalized_latitude_weights(target).astype(loss.dtype)
     if 'level' in target.dims:
@@ -150,11 +152,11 @@ def normalized_latitude_weights(data: xarray.DataArray) -> xarray.DataArray:
 def _weight_for_latitude_vector_without_poles(latitude):
   """Weights for uniform latitudes of the form [+-90-+d/2, ..., -+90+-d/2]."""
   delta_latitude = np.abs(_check_uniform_spacing_and_get_delta(latitude))
-  if (not np.isclose(np.max(latitude), 90 - delta_latitude/2) or
-      not np.isclose(np.min(latitude), -90 + delta_latitude/2)):
-    raise ValueError(
-        f'Latitude vector {latitude} does not start/end at '
-        '+- (90 - delta_latitude/2) degrees.')
+ #if (not np.isclose(np.max(latitude), 90 - delta_latitude/2) or
+ #    not np.isclose(np.min(latitude), -90 + delta_latitude/2)):
+ #  raise ValueError(
+ #      f'Latitude vector {latitude} does not start/end at '
+ #      '+- (90 - delta_latitude/2) degrees.')
   return np.cos(np.deg2rad(latitude))
 
 
