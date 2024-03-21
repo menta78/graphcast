@@ -43,6 +43,7 @@ def parse_file_parts(file_name):
 print("creating/loading model_config and task_config")
 
 # very coarse model to test on my laptop
+# PUT BACK LATENT SIZE TO 512, I PUT IT TO 256 FOR MEMORY CONSTRAINT
 model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=256, gnn_msg_steps=16, hidden_layers=1, 
         radius_query_fraction_edge_length=0.6, mesh2grid_edge_normalization_factor=0.6180338738074472)
 
@@ -201,7 +202,7 @@ optimiser = optax.adam(lr, b1=0.9, b2=0.999, eps=1e-8)
 opt_state = optimiser.init(params)
 
 # training loop
-nepochs = 10
+nepochs = 40
 #nepochs = 2
 jitted = True
 for iepoch in range(nepochs):

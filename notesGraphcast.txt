@@ -1,0 +1,153 @@
+
+##### PREPARING THE ENVIRONMENT ######
+- commands to install a working miniconda with cuda12:
+/condapath/bin/conda create --name jax_graphcast python=3.11
+. /condapath/bin/activate jax_graphcast
+conda install -c conda-forge mamba
+mamba install -c conda-forge tensorflow-gpu ipython jupyter chex dask xarray dm-tree scipy shapely matplotlib cartopy
+python -m pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+python -m pip install git+https://github.com/deepmind/jaxline
+python -m pip install jraph
+python -m pip install google-cloud-storage
+python -m pip install trimesh[easy]
+######################################
+
+
+- architecture is based on JAX/Optax/jraph, not on tensorflow
+
+JAX is NumPy on the CPU, GPU, and TPU, with great automatic differentiation for high-performance machine learning research.
+Google JAX is a machine learning framework for transforming numerical functions, to be used in Python.[2][3][4] It is described as bringing together a modified version of autograd (automatic obtaining of the gradient function through differentiation of a function) and TensorFlow's XLA (Accelerated Linear Algebra). It is designed to follow the structure and workflow of NumPy as closely as possible and works with various existing frameworks such as TensorFlow and PyTorch.[5][6] The primary functions of JAX are:[2]
+  grad: automatic differentiation
+  jit: compilation
+  vmap: auto-vectorization
+  pmap: SPMD programming
+
+
+
+######################################
+
+- graphcast.ModelConfig: contains the condifugations of the model, noticeably:
+    resolution: The resolution of the data, in degrees (e.g. 0.25 or 1.0).
+    mesh_size: How many refinements to do on the multi-mesh.
+    gnn_msg_steps: How many Graph Network message passing steps to do.
+    latent_size: How many latent features to include in the various MLPs.
+    hidden_layers: How many hidden layers for each MLP.
+    radius_query_fraction_edge_length: Scalar that will be multiplied by the
+        length of the longest edge of the finest mesh to define the radius of
+        connectivity to use in the Grid2Mesh graph. Reasonable values are
+        between 0.6 and 1. 0.6 reduces the number of grid points feeding into
+        multiple mesh nodes and therefore reduces edge count and memory use, but
+        1 gives better predictions.
+    mesh2grid_edge_normalization_factor: Allows explicitly controlling edge
+        normalization for mesh2grid edges. If None, defaults to max edge length.
+        This supports using pre-trained model weights with a different graph
+        structure to what it was trained on.
+
+- graphcast.TaskConfig: Defines inputs and targets on which a model is trained and/or evaluated
+
+- icosahedral_mesh.faces_to_edges(faces): computed the edges of the graph, rotating around each triangle
+
+
+
+
+
+message Time-dependent input variable temperature must either be a forcing variable, or a target variable to allow for auto-regressive feedback.
+some variables must be target variables because they are used as both input and output
+
+
+
+##############################
+#### TRAINING ################
+##############################
+
+The training loop is missing from the jupyter notebook.
+
+in the script graphcast_demo_menta.py provides a working training loop for a small case.
+
+In general graphcast is trained on the whole ERA5 for each epoch, using a batch size of 32 time steps.
+
+#############################
+
+
+
+###########################################
+#### Memory use and velocity ##############
+###########################################
+
+- latent_size: The use of memory is very sensitive to the parameter latent_size. If latent_size=512 the system explodes in my pc. if it is 256 it works.
+- XLA_PYTHON_CLIENT_ALLOCATOR=platform : this environment variable makes the system a bit slower, but deallocates the memory from the GPU when the variables are deleted, helping reducing the amount of memory required. The instruction os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform" at the beginning of the script does the job
+
+
+###########################################
+#### organization of the input files ######
+###########################################
+
+input data: they are organized in a netcdf.
+The variables have 4 or 5 dimensions: (batch, time, lat, lon) or (batch, time, level, lat, lon)
+
+in the batch size is 32, it means that the time steps in the file must be organized in batches of 32
+
+input_variables, target_variables: variables that are inputed and self-regressed. A variable can be both in input and target
+forcing_variables: these are external forcing variables
+
+
+
+###########################################
+data normalization
+###########################################
+to my understanding is done based on the files mean_by_level.nc, stddev_by_level.nc, diffs_stddev_by_level.nc(?)
+  
+  
+  
+  
+  
+##############################################
+######## source code #########################
+##############################################
+
+The loss is computed in the module losses.py, function weighted_mse_per_level
+- the loss is rmse weighted with latitude, and altitude (the higher the lower the weight in the loss)
+  the normalized_latitude_weights function originally would like data to go from -90 to 90, but I don't see a real necessity for that.
+- RMSE is computed for each variable and the result is summed
+
+
+-> graphcast.py
+contains the class GraphCast, inheriting from base.Predictor
+GraphCast._meshes: list of icosahedral meshes. It has a size of 5 even if I set a number of meshes == 4
+
+the icosaheders are created in a 3d space, using 3d cartesian coordinates with values in [-1,1]. 
+The 3d cartesian coordinates can be converted to lon-lat with the function model_utils.cartesian_to_spherical
+
+
+GraphCast._maybe_init: method that does the initialization of the GraphCast object if it was not initialized yet.
+However, here you can only count on the coordinates, the values of the variables cannot be accessed here
+
+variables from where we should remove masked areas:
+  GraphCast._grid_lon
+  GraphCast._grid_lat
+  GraphCast._grid_nodes_lon
+  GraphCast._grid_nodes_lat
+  GraphCast._mesh_nodes_lon
+  GraphCast._mesh_nodes_lat
+  senders and grid_idices in _init_grid2mesh_graph
+  receivers and mesh_idices in _init_grid2mesh_graph
+  ....
+  
+  Idea for the icosahedral mesh:
+  in _meshes remove all the vertices on land, and the faces that impinge on them
+
+  after _meshes is created and you load your mask, invoke a function pruneVerticesOnLand() which:
+  invokes the function model_utils.cartesian_to_spherical to get the coordinates
+  for each node check if the coordinates fall on land
+  if the coordinate fall on land remove the node and all the faces that contain it
+  
+  Idea for the grid:
+  remove the nodes on land directly on grid_nodes_lon/lat in _init_grid_properties
+
+  change radius_query_indices in grid_mesh_connectivity.py
+
+  graphcast._inputs_to_grid_node_features: process each record of input. You must apply the mask here
+  
+  graphcast._grid_node_outputs_to_prediction: process the output to recreate the grid. You must regrid the data here
+  
+  losses.weighted_mse_per_level : computation of the loss (the nans must be removed from here)
