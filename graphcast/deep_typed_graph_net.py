@@ -252,6 +252,7 @@ class DeepTypedGraphNet(hk.Module):
               ))
 
     # The output MLPs converts edge/node latent features into the output sizes.
+    #if self._node_output_size == 1:
     output_kwargs = dict(
         embed_edge_fn=_build_update_fns_for_edge_types(
             build_mlp, graph_template, "decoder_edges_", self._edge_output_size)

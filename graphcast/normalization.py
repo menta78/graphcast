@@ -37,11 +37,11 @@ def normalize(values: xarray.Dataset,
           "Can't look up normalization constants because array has no name.")
     if locations is not None:
       if array.name in locations:
-        array = array - locations[array.name].astype(array.dtype)
+        array = array - locations[array.name].astype(array.dtype).values[0] # 1 level
       else:
         logging.warning('No normalization location found for %s', array.name)
     if array.name in scales:
-      array = array / scales[array.name].astype(array.dtype)
+      array = array / scales[array.name].astype(array.dtype).values[0] # 1 level
     else:
       logging.warning('No normalization scale found for %s', array.name)
     return array
@@ -58,12 +58,12 @@ def unnormalize(values: xarray.Dataset,
       raise ValueError(
           "Can't look up normalization constants because array has no name.")
     if array.name in scales:
-      array = array * scales[array.name].astype(array.dtype)
+      array = array * scales[array.name].astype(array.dtype).values[0] # 1 level
     else:
       logging.warning('No normalization scale found for %s', array.name)
     if locations is not None:
       if array.name in locations:
-        array = array + locations[array.name].astype(array.dtype)
+        array = array + locations[array.name].astype(array.dtype).values[0] # 1 level
       else:
         logging.warning('No normalization location found for %s', array.name)
     return array

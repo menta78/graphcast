@@ -30,7 +30,7 @@ from typing import Any, Callable, Mapping, Optional
 import chex
 from graphcast import deep_typed_graph_net
 from graphcast import grid_mesh_connectivity
-from graphcast import icosahedral_mesh
+from graphcast import unstructured_mesh
 from graphcast import losses
 from graphcast import model_utils
 from graphcast import predictor_base
@@ -44,28 +44,6 @@ import xarray
 Kwargs = Mapping[str, Any]
 
 GNN = Callable[[jraph.GraphsTuple], jraph.GraphsTuple]
-
-
-# https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5
-PRESSURE_LEVELS_ERA5_37 = (
-    1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 125, 150, 175, 200, 225, 250, 300,
-    350, 400, 450, 500, 550, 600, 650, 700, 750, 775, 800, 825, 850, 875, 900,
-    925, 950, 975, 1000)
-
-# https://www.ecmwf.int/en/forecasts/datasets/set-i
-PRESSURE_LEVELS_HRES_25 = (
-    1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 150, 200, 250, 300, 400, 500, 600,
-    700, 800, 850, 900, 925, 950, 1000)
-
-# https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2020MS002203
-PRESSURE_LEVELS_WEATHERBENCH_13 = (
-    50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000)
-
-PRESSURE_LEVELS = {
-    13: PRESSURE_LEVELS_WEATHERBENCH_13,
-    25: PRESSURE_LEVELS_HRES_25,
-    37: PRESSURE_LEVELS_ERA5_37,
-}
 
 # The list of all possible atmospheric variables. Taken from:
 # https://confluence.ecmwf.int/display/CKB/ERA5%3A+data+documentation#ERA5:datadocumentation-Table9
@@ -139,7 +117,6 @@ class TaskConfig:
   # Target variables which the model is expected to predict.
   target_variables: tuple[str, ...]
   forcing_variables: tuple[str, ...]
-  pressure_levels: tuple[int, ...]
   input_duration: str
 
 TASK = TaskConfig(
@@ -148,7 +125,6 @@ TASK = TaskConfig(
         STATIC_VARS),
     target_variables=TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS,
     forcing_variables=FORCING_VARS,
-    pressure_levels=PRESSURE_LEVELS_ERA5_37,
     input_duration="12h",
 )
 TASK_13 = TaskConfig(
@@ -157,7 +133,6 @@ TASK_13 = TaskConfig(
         STATIC_VARS),
     target_variables=TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS,
     forcing_variables=FORCING_VARS,
-    pressure_levels=PRESSURE_LEVELS_WEATHERBENCH_13,
     input_duration="12h",
 )
 TASK_13_PRECIP_OUT = TaskConfig(
@@ -166,7 +141,6 @@ TASK_13_PRECIP_OUT = TaskConfig(
         STATIC_VARS),
     target_variables=TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS,
     forcing_variables=FORCING_VARS,
-    pressure_levels=PRESSURE_LEVELS_WEATHERBENCH_13,
     input_duration="12h",
 )
 
@@ -198,6 +172,7 @@ class ModelConfig:
   gnn_msg_steps: int
   hidden_layers: int
   radius_query_fraction_edge_length: float
+  mesh_file_path: str
   mesh2grid_edge_normalization_factor: Optional[float] = None
 
 
@@ -251,10 +226,8 @@ class GraphCast(predictor_base.Predictor):
         relative_latitude_local_coordinates=True,
     )
 
-    # Specification of the multimesh.
-    self._meshes = (
-        icosahedral_mesh.get_hierarchy_of_triangular_meshes_for_sphere(
-            splits=model_config.mesh_size))
+    # Specification of the graph.
+    self._mesh = unstructured_mesh.loadFromGr3(model_config.mesh_file_path)
 
     # Encoder, which moves data from the grid to the mesh with a single message
     # passing step.
@@ -277,12 +250,14 @@ class GraphCast(predictor_base.Predictor):
     )
 
     # Processor, which performs message passing on the multi-mesh.
+    mesh_gnn_latent_size = model_config.latent_size
     self._mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
         embed_nodes=False,  # Node features already embdded by previous layers.
         embed_edges=True,  # Embed raw features of the multi-mesh edges.
-        node_latent_size=dict(mesh_nodes=model_config.latent_size),
-        edge_latent_size=dict(mesh=model_config.latent_size),
-        mlp_hidden_size=model_config.latent_size,
+        node_latent_size=dict(mesh_nodes=mesh_gnn_latent_size),
+        edge_latent_size=dict(mesh=mesh_gnn_latent_size),
+        node_output_size=dict(mesh_nodes=len(task_config.target_variables)),
+        mlp_hidden_size=mesh_gnn_latent_size,
         mlp_num_hidden_layers=model_config.hidden_layers,
         num_message_passing_steps=model_config.gnn_msg_steps,
         use_layer_norm=True,
@@ -292,37 +267,9 @@ class GraphCast(predictor_base.Predictor):
         name="mesh_gnn",
     )
 
-    num_surface_vars = len(
-        set(task_config.target_variables) - set(ALL_ATMOSPHERIC_VARS))
-    num_atmospheric_vars = len(
-        set(task_config.target_variables) & set(ALL_ATMOSPHERIC_VARS))
-    num_outputs = (num_surface_vars +
-                   len(task_config.pressure_levels) * num_atmospheric_vars)
-
-    # Decoder, which moves data from the mesh back into the grid with a single
-    # message passing step.
-    self._mesh2grid_gnn = deep_typed_graph_net.DeepTypedGraphNet(
-        # Require a specific node dimensionaly for the grid node outputs.
-        node_output_size=dict(grid_nodes=num_outputs),
-        embed_nodes=False,  # Node features already embdded by previous layers.
-        embed_edges=True,  # Embed raw features of the mesh2grid edges.
-        edge_latent_size=dict(mesh2grid=model_config.latent_size),
-        node_latent_size=dict(
-            mesh_nodes=model_config.latent_size,
-            grid_nodes=model_config.latent_size),
-        mlp_hidden_size=model_config.latent_size,
-        mlp_num_hidden_layers=model_config.hidden_layers,
-        num_message_passing_steps=1,
-        use_layer_norm=True,
-        include_sent_messages_in_node_update=False,
-        activation="swish",
-        f32_aggregation=False,
-        name="mesh2grid_gnn",
-    )
-
     # Obtain the query radius in absolute units for the unit-sphere for the
     # grid2mesh model, by rescaling the `radius_query_fraction_edge_length`.
-    self._query_radius = (_get_max_edge_distance(self._finest_mesh)
+    self._query_radius = (_get_max_edge_distance(self._mesh)
                           * model_config.radius_query_fraction_edge_length)
     self._mesh2grid_edge_normalization_factor = (
         model_config.mesh2grid_edge_normalization_factor
@@ -350,22 +297,25 @@ class GraphCast(predictor_base.Predictor):
     self._mesh_graph_structure = None
     self._mesh2grid_graph_structure = None
 
-  @property
-  def _finest_mesh(self):
-    return self._meshes[-1]
-
   def __call__(self,
                inputs: xarray.Dataset,
                targets_template: xarray.Dataset,
                forcings: xarray.Dataset,
                is_training: bool = False,
                ) -> xarray.Dataset:
-    self._maybe_init(inputs)
+    self._maybe_init(forcings)
 
     # Convert all input data into flat vectors for each of the grid nodes.
     # xarray (batch, time, lat, lon, level, multiple vars, forcings)
     # -> [num_grid_nodes, batch, num_channels]
-    grid_node_features = self._inputs_to_grid_node_features(inputs, forcings)
+    grid_node_features = self._forcings_to_grid_node_features(forcings)
+    mesh_node_features = model_utils.dataset_to_stacked(inputs)
+    mesh_node_features = mesh_node_features.transpose("node", ...) # setting node to leading axes
+    mesh_node_features = xarray_jax.unwrap(mesh_node_features.data)
+  # def debug_callback(grid_node_features, mesh_node_features):
+  #     import pdb; pdb.set_trace()
+  # import jax
+  # jax.debug.callback(debug_callback, grid_node_features, mesh_node_features)
 
     # Transfer data for the grid to the mesh,
     # [num_mesh_nodes, batch, latent_size], [num_grid_nodes, batch, latent_size]
@@ -374,18 +324,23 @@ class GraphCast(predictor_base.Predictor):
 
     # Run message passing in the multimesh.
     # [num_mesh_nodes, batch, latent_size]
-    updated_latent_mesh_nodes = self._run_mesh_gnn(latent_mesh_nodes)
-
-    # Transfer data frome the mesh to the grid.
-    # [num_grid_nodes, batch, output_size]
-    output_grid_nodes = self._run_mesh2grid_gnn(
-        updated_latent_mesh_nodes, latent_grid_nodes)
+    # TODO COULD BE THE WRONG WAY TO BLEND INPUT AND LATENT SPACE. YOU NEED TO MOVE FROM THE LATENT SPACE TO THE OUTPUT
+    output_mesh_nodes = self._run_mesh_gnn(latent_mesh_nodes)
 
     # Conver output flat vectors for the grid nodes to the format of the output.
     # [num_grid_nodes, batch, output_size] ->
     # xarray (batch, one time step, lat, lon, level, multiple vars)
-    return self._grid_node_outputs_to_prediction(
-        output_grid_nodes, targets_template)
+
+    # final rearranging
+    dims = ("node", "batch", "channels")
+    mesh_array_node_leading = xarray_jax.DataArray(
+            data=output_mesh_nodes, 
+            dims=dims)
+    output_mesh_nodes = model_utils.restore_leading_axes(
+            mesh_array_node_leading)
+    output_mesh = model_utils.stacked_to_dataset(
+            output_mesh_nodes.variable, targets_template)
+    return output_mesh
 
   def loss_and_predictions(  # pytype: disable=signature-mismatch  # jax-ndarray
       self,
@@ -397,7 +352,7 @@ class GraphCast(predictor_base.Predictor):
     predictions = self(
         inputs, targets_template=targets, forcings=forcings, is_training=True)
     # Compute loss.
-    loss = losses.weighted_mse_per_level(
+    loss = losses.weighted_mse(
         predictions, targets,
         per_variable_weights={
           # # Any variables not specified here are weighted as 1.0.
@@ -432,17 +387,16 @@ class GraphCast(predictor_base.Predictor):
           grid_lat=sample_inputs.lat, grid_lon=sample_inputs.lon)
       self._grid2mesh_graph_structure = self._init_grid2mesh_graph()
       self._mesh_graph_structure = self._init_mesh_graph()
-      self._mesh2grid_graph_structure = self._init_mesh2grid_graph()
 
       self._initialized = True
 
   def _init_mesh_properties(self):
     """Inits static properties that have to do with mesh nodes."""
-    self._num_mesh_nodes = self._finest_mesh.vertices.shape[0]
+    self._num_mesh_nodes = self._mesh.vertices.shape[0]
     mesh_phi, mesh_theta = model_utils.cartesian_to_spherical(
-        self._finest_mesh.vertices[:, 0],
-        self._finest_mesh.vertices[:, 1],
-        self._finest_mesh.vertices[:, 2])
+        self._mesh.vertices[:, 0],
+        self._mesh.vertices[:, 1],
+        self._mesh.vertices[:, 2])
     (
         mesh_nodes_lat,
         mesh_nodes_lon,
@@ -472,7 +426,7 @@ class GraphCast(predictor_base.Predictor):
     (grid_indices, mesh_indices) = grid_mesh_connectivity.radius_query_indices(
         grid_latitude=self._grid_lat,
         grid_longitude=self._grid_lon,
-        mesh=self._finest_mesh,
+        mesh=self._mesh,
         radius=self._query_radius)
 
     # Edges sending info from grid to mesh.
@@ -518,10 +472,8 @@ class GraphCast(predictor_base.Predictor):
 
   def _init_mesh_graph(self) -> typed_graph.TypedGraph:
     """Build Mesh graph."""
-    merged_mesh = icosahedral_mesh.merge_meshes(self._meshes)
-
     # Work simply on the mesh edges.
-    senders, receivers = icosahedral_mesh.faces_to_edges(merged_mesh.faces)
+    senders, receivers = self._mesh.faces_to_edges()
 
     # Precompute structural node and edge features according to config options.
     # Structural features are those that depend on the fixed values of the
@@ -554,57 +506,6 @@ class GraphCast(predictor_base.Predictor):
         edges=edges)
 
     return mesh_graph
-
-  def _init_mesh2grid_graph(self) -> typed_graph.TypedGraph:
-    """Build Mesh2Grid graph."""
-
-    # Create some edges according to how the grid nodes are contained by
-    # mesh triangles.
-    (grid_indices,
-     mesh_indices) = grid_mesh_connectivity.in_mesh_triangle_indices(
-         grid_latitude=self._grid_lat,
-         grid_longitude=self._grid_lon,
-         mesh=self._finest_mesh)
-
-    # Edges sending info from mesh to grid.
-    senders = mesh_indices
-    receivers = grid_indices
-
-    # Precompute structural node and edge features according to config options.
-    assert self._mesh_nodes_lat is not None and self._mesh_nodes_lon is not None
-    (senders_node_features, receivers_node_features,
-     edge_features) = model_utils.get_bipartite_graph_spatial_features(
-         senders_node_lat=self._mesh_nodes_lat,
-         senders_node_lon=self._mesh_nodes_lon,
-         receivers_node_lat=self._grid_nodes_lat,
-         receivers_node_lon=self._grid_nodes_lon,
-         senders=senders,
-         receivers=receivers,
-         edge_normalization_factor=self._mesh2grid_edge_normalization_factor,
-         **self._spatial_features_kwargs,
-     )
-
-    n_grid_node = np.array([self._num_grid_nodes])
-    n_mesh_node = np.array([self._num_mesh_nodes])
-    n_edge = np.array([senders.shape[0]])
-    grid_node_set = typed_graph.NodeSet(
-        n_node=n_grid_node, features=receivers_node_features)
-    mesh_node_set = typed_graph.NodeSet(
-        n_node=n_mesh_node, features=senders_node_features)
-    edge_set = typed_graph.EdgeSet(
-        n_edge=n_edge,
-        indices=typed_graph.EdgesIndices(senders=senders, receivers=receivers),
-        features=edge_features)
-    nodes = {"grid_nodes": grid_node_set, "mesh_nodes": mesh_node_set}
-    edges = {
-        typed_graph.EdgeSetKey("mesh2grid", ("mesh_nodes", "grid_nodes")):
-            edge_set
-    }
-    mesh2grid_graph = typed_graph.TypedGraph(
-        context=typed_graph.Context(n_graph=np.array([1]), features=()),
-        nodes=nodes,
-        edges=edges)
-    return mesh2grid_graph
 
   def _run_grid2mesh_gnn(self, grid_node_features: chex.Array,
                          ) -> tuple[chex.Array, chex.Array]:
@@ -697,89 +598,22 @@ class GraphCast(predictor_base.Predictor):
     # Run the GNN.
     return self._mesh_gnn(input_graph).nodes["mesh_nodes"].features
 
-  def _run_mesh2grid_gnn(self,
-                         updated_latent_mesh_nodes: chex.Array,
-                         latent_grid_nodes: chex.Array,
-                         ) -> chex.Array:
-    """Runs the mesh2grid_gnn, extracting the output grid nodes."""
-
-    # Add the structural edge features of this graph. Note we don't need
-    # to add the structural node features, because these are already part of
-    # the latent state, via the original Grid2Mesh gnn, however, we need
-    # the edge ones, because it is the first time we are seeing this particular
-    # set of edges.
-    batch_size = updated_latent_mesh_nodes.shape[1]
-
-    mesh2grid_graph = self._mesh2grid_graph_structure
-    assert mesh2grid_graph is not None
-    mesh_nodes = mesh2grid_graph.nodes["mesh_nodes"]
-    grid_nodes = mesh2grid_graph.nodes["grid_nodes"]
-    new_mesh_nodes = mesh_nodes._replace(features=updated_latent_mesh_nodes)
-    new_grid_nodes = grid_nodes._replace(features=latent_grid_nodes)
-    mesh2grid_key = mesh2grid_graph.edge_key_by_name("mesh2grid")
-    edges = mesh2grid_graph.edges[mesh2grid_key]
-
-    new_edges = edges._replace(
-        features=_add_batch_second_axis(
-            edges.features.astype(latent_grid_nodes.dtype), batch_size))
-
-    input_graph = mesh2grid_graph._replace(
-        edges={mesh2grid_key: new_edges},
-        nodes={
-            "mesh_nodes": new_mesh_nodes,
-            "grid_nodes": new_grid_nodes
-        })
-
-    # Run the GNN.
-    output_graph = self._mesh2grid_gnn(input_graph)
-    output_grid_nodes = output_graph.nodes["grid_nodes"].features
-
-    return output_grid_nodes
-
-  def _inputs_to_grid_node_features(
+  def _forcings_to_grid_node_features(
       self,
-      inputs: xarray.Dataset,
       forcings: xarray.Dataset,
       ) -> chex.Array:
     """xarrays -> [num_grid_nodes, batch, num_channels]."""
 
     # xarray `Dataset` (batch, time, lat, lon, level, multiple vars)
     # to xarray `DataArray` (batch, lat, lon, channels)
-    stacked_inputs = model_utils.dataset_to_stacked(inputs).fillna(0)
-    stacked_forcings = model_utils.dataset_to_stacked(forcings).fillna(0)
-    stacked_inputs = xarray.concat(
-        [stacked_inputs, stacked_forcings], dim="channels")
+    stacked_forcings = model_utils.dataset_to_stacked(forcings)
 
     # xarray `DataArray` (batch, lat, lon, channels)
     # to single numpy array with shape [lat_lon_node, batch, channels]
     grid_xarray_lat_lon_leading = model_utils.lat_lon_to_leading_axes(
-        stacked_inputs)
+        stacked_forcings)
     return xarray_jax.unwrap(grid_xarray_lat_lon_leading.data).reshape(
         (-1,) + grid_xarray_lat_lon_leading.data.shape[2:])
-
-  def _grid_node_outputs_to_prediction(
-      self,
-      grid_node_outputs: chex.Array,
-      targets_template: xarray.Dataset,
-      ) -> xarray.Dataset:
-    """[num_grid_nodes, batch, num_outputs] -> xarray."""
-
-    # numpy array with shape [lat_lon_node, batch, channels]
-    # to xarray `DataArray` (batch, lat, lon, channels)
-    assert self._grid_lat is not None and self._grid_lon is not None
-    grid_shape = (self._grid_lat.shape[0], self._grid_lon.shape[0])
-    grid_outputs_lat_lon_leading = grid_node_outputs.reshape(
-        grid_shape + grid_node_outputs.shape[1:])
-    dims = ("lat", "lon", "batch", "channels")
-    grid_xarray_lat_lon_leading = xarray_jax.DataArray(
-        data=grid_outputs_lat_lon_leading,
-        dims=dims)
-    grid_xarray = model_utils.restore_leading_axes(grid_xarray_lat_lon_leading)
-
-    # xarray `DataArray` (batch, lat, lon, channels)
-    # to xarray `Dataset` (batch, one time step, lat, lon, level, multiple vars)
-    return model_utils.stacked_to_dataset(
-        grid_xarray.variable, targets_template)
 
 
 def _add_batch_second_axis(data, batch_size):
@@ -790,7 +624,7 @@ def _add_batch_second_axis(data, batch_size):
 
 
 def _get_max_edge_distance(mesh):
-  senders, receivers = icosahedral_mesh.faces_to_edges(mesh.faces)
+  senders, receivers = mesh.faces_to_edges()
   edge_distances = np.linalg.norm(
       mesh.vertices[senders] - mesh.vertices[receivers], axis=-1)
   return edge_distances.max()

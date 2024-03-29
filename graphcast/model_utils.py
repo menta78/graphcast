@@ -159,7 +159,7 @@ def restore_leading_axes(grid_xarray: xarray.DataArray) -> xarray.DataArray:
 
   input_dims = list(grid_xarray.dims)
   output_dims = list(input_dims)
-  for leading_key in ["level", "time", "batch"]:  # reverse order for insert
+  for leading_key in ["time", "batch"]:  # reverse order for insert
     if leading_key in input_dims:
       output_dims.remove(leading_key)
       output_dims.insert(0, leading_key)
@@ -593,7 +593,7 @@ def get_bipartite_relative_position_in_receiver_local_coordinates(
 def variable_to_stacked(
     variable: xarray.Variable,
     sizes: Mapping[str, int],
-    preserved_dims: Tuple[str, ...] = ("batch", "lat", "lon"),
+    preserved_dims: Tuple[str, ...] = ("batch", "lat", "lon", "node"),
     ) -> xarray.Variable:
   """Converts an xarray.Variable to preserved_dims + ("channels",).
 
@@ -613,11 +613,13 @@ def variable_to_stacked(
   Returns:
     An xarray.Variable with dimensions preserved_dims + ("channels",).
   """
+  vrbldims = variable.dims
   stack_to_channels_dims = [
       d for d in variable.dims if d not in preserved_dims]
   if stack_to_channels_dims:
     variable = variable.stack(channels=stack_to_channels_dims)
-  dims = {dim: variable.sizes.get(dim) or sizes[dim] for dim in preserved_dims}
+  dims = {dim: variable.sizes.get(dim) or sizes[dim] 
+          for dim in preserved_dims if dim in vrbldims}
   dims["channels"] = variable.sizes.get("channels", 1)
   return variable.set_dims(dims)
 
@@ -625,7 +627,7 @@ def variable_to_stacked(
 def dataset_to_stacked(
     dataset: xarray.Dataset,
     sizes: Optional[Mapping[str, int]] = None,
-    preserved_dims: Tuple[str, ...] = ("batch", "lat", "lon"),
+    preserved_dims: Tuple[str, ...] = ("batch", "lat", "lon", "node"),
 ) -> xarray.DataArray:
   """Converts an xarray.Dataset to a single stacked array.
 
@@ -661,7 +663,7 @@ def dataset_to_stacked(
 def stacked_to_dataset(
     stacked_array: xarray.Variable,
     template_dataset: xarray.Dataset,
-    preserved_dims: Tuple[str, ...] = ("batch", "lat", "lon"),
+    preserved_dims: Tuple[str, ...] = ("batch", "node"),
     ) -> xarray.Dataset:
   """The inverse of dataset_to_stacked.
 
