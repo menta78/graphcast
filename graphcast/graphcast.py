@@ -250,7 +250,7 @@ class GraphCast(predictor_base.Predictor):
     )
 
     # feature learning of the input loaded from the unstructured mesh
-    mesh_gnn_latent_size = model_config.latent_size
+    mesh_gnn_latent_size = 8
     self._mesh2mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
         embed_nodes=False,  # Node features already embdded by previous layers.
         embed_edges=True,  # Embed raw features of the multi-mesh edges.
@@ -261,13 +261,13 @@ class GraphCast(predictor_base.Predictor):
         num_message_passing_steps=model_config.gnn_msg_steps,
         use_layer_norm=True,
         include_sent_messages_in_node_update=False,
-        activation="swish",
+        activation="sigmoid",
         f32_aggregation=False,
         name="mesh2mesh_gnn",
     )
 
     # Processor, which performs message passing on the multi-mesh.
-    mesh_gnn_latent_size = model_config.latent_size*2
+    mesh_gnn_latent_size = model_config.latent_size + mesh_gnn_latent_size
     self._mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
         embed_nodes=False,  # Node features already embdded by previous layers.
         embed_edges=True,  # Embed raw features of the multi-mesh edges.
@@ -326,26 +326,21 @@ class GraphCast(predictor_base.Predictor):
     # xarray (batch, time, lat, lon, level, multiple vars, forcings)
     # -> [num_grid_nodes, batch, num_channels]
     grid_node_features = self._forcings_to_grid_node_features(forcings)
-    mesh_node_features = model_utils.dataset_to_stacked(inputs)
-    mesh_node_features = mesh_node_features.transpose("node", ...) # setting node to leading axes
-    mesh_node_features = xarray_jax.unwrap(mesh_node_features.data)
-  # def debug_callback(grid_node_features, mesh_node_features):
-  #     import pdb; pdb.set_trace()
-  # import jax
-  # jax.debug.callback(debug_callback, grid_node_features, mesh_node_features)
+    input_node_features = model_utils.dataset_to_stacked(inputs)
+    input_node_features = input_node_features.transpose("node", ...) # setting node to leading axes
+    input_node_features = xarray_jax.unwrap(input_node_features.data)
 
     # Transfer data for the grid to the mesh,
     # [num_mesh_nodes, batch, latent_size], [num_grid_nodes, batch, latent_size]
     (latent_mesh_forcing_features, latent_grid_nodes
      ) = self._run_grid2mesh_gnn(grid_node_features)
 
-    latent_mesh_input_features = self._run_mesh2mesh_gnn(mesh_node_features)
-
+    # mesh 2 mesh graph network, for feature learning on the mesh input
+    latent_mesh_input_features = self._run_mesh2mesh_gnn(input_node_features)
     latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, latent_mesh_input_features], 2)
 
     # Run message passing in the multimesh.
     # [num_mesh_nodes, batch, latent_size]
-    # TODO COULD BE THE WRONG WAY TO BLEND INPUT AND LATENT SPACE. YOU NEED TO MOVE FROM THE LATENT SPACE TO THE OUTPUT
     output_mesh_nodes = self._run_mesh_gnn(latent_mesh_nodes)
 
     # Conver output flat vectors for the grid nodes to the format of the output.

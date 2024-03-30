@@ -160,11 +160,11 @@ class InputsAndResiduals(predictor_base.Predictor):
         norm_predictions)
 
   def loss(self,
-           inputs: xarray.Dataset,
-           targets: xarray.Dataset,
-           forcings: xarray.Dataset,
-           **kwargs,
-           ) -> predictor_base.LossAndDiagnostics:
+          inputs: xarray.Dataset,
+          targets: xarray.Dataset,
+          forcings: xarray.Dataset,
+          **kwargs,
+          ) -> predictor_base.LossAndDiagnostics:
     """Returns the loss computed on normalized inputs and targets."""
     norm_inputs = normalize(inputs, self._scales, self._locations)
     norm_forcings = normalize(forcings, self._scales, self._locations)
@@ -172,7 +172,7 @@ class InputsAndResiduals(predictor_base.Predictor):
         lambda t: self._subtract_input_and_normalize_target(inputs, t),
         targets)
     return self._predictor.loss(
-        norm_inputs, norm_target_residuals, forcings=norm_forcings, **kwargs)
+       norm_inputs, norm_target_residuals, forcings=norm_forcings, **kwargs)
 
   def loss_and_predictions(  # pytype: disable=signature-mismatch  # jax-ndarray
       self,
@@ -185,10 +185,9 @@ class InputsAndResiduals(predictor_base.Predictor):
     """The loss computed on normalized data, with unnormalized predictions."""
     norm_inputs = normalize(inputs, self._scales, self._locations)
     norm_forcings = normalize(forcings, self._scales, self._locations)
-   #norm_target_residuals = xarray_tree.map_structure(
-   #    lambda t: self._subtract_input_and_normalize_target(inputs, t),
-   #    targets)
-    norm_targets = normalize(targets, self._scales, self._locations)
+    norm_target_residuals = xarray_tree.map_structure(
+        lambda t: self._subtract_input_and_normalize_target(inputs, t),
+        targets)
 
    #import jax
    #def dbgclbck(inputs, targets, forcings, norm_inputs, norm_forcings, norm_target_residuals):
@@ -196,7 +195,7 @@ class InputsAndResiduals(predictor_base.Predictor):
    #jax.debug.callback(dbgclbck, inputs, targets, forcings, norm_inputs, norm_forcings, norm_target_residuals)
 
     (loss, scalars), norm_predictions = self._predictor.loss_and_predictions(
-        norm_inputs, norm_targets, forcings=norm_forcings, **kwargs)
+        norm_inputs, norm_target_residuals, forcings=norm_forcings, **kwargs)
     predictions = xarray_tree.map_structure(
         lambda pred: self._unnormalize_prediction_and_add_input(inputs, pred),
         norm_predictions)
