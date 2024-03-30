@@ -249,8 +249,25 @@ class GraphCast(predictor_base.Predictor):
         name="grid2mesh_gnn",
     )
 
-    # Processor, which performs message passing on the multi-mesh.
+    # feature learning of the input loaded from the unstructured mesh
     mesh_gnn_latent_size = model_config.latent_size
+    self._mesh2mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
+        embed_nodes=False,  # Node features already embdded by previous layers.
+        embed_edges=True,  # Embed raw features of the multi-mesh edges.
+        node_latent_size=dict(mesh_nodes=mesh_gnn_latent_size),
+        edge_latent_size=dict(mesh=mesh_gnn_latent_size),
+        mlp_hidden_size=mesh_gnn_latent_size,
+        mlp_num_hidden_layers=model_config.hidden_layers,
+        num_message_passing_steps=model_config.gnn_msg_steps,
+        use_layer_norm=True,
+        include_sent_messages_in_node_update=False,
+        activation="swish",
+        f32_aggregation=False,
+        name="mesh2mesh_gnn",
+    )
+
+    # Processor, which performs message passing on the multi-mesh.
+    mesh_gnn_latent_size = model_config.latent_size*2
     self._mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
         embed_nodes=False,  # Node features already embdded by previous layers.
         embed_edges=True,  # Embed raw features of the multi-mesh edges.
@@ -319,8 +336,12 @@ class GraphCast(predictor_base.Predictor):
 
     # Transfer data for the grid to the mesh,
     # [num_mesh_nodes, batch, latent_size], [num_grid_nodes, batch, latent_size]
-    (latent_mesh_nodes, latent_grid_nodes
+    (latent_mesh_forcing_features, latent_grid_nodes
      ) = self._run_grid2mesh_gnn(grid_node_features)
+
+    latent_mesh_input_features = self._run_mesh2mesh_gnn(mesh_node_features)
+
+    latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, latent_mesh_input_features], 2)
 
     # Run message passing in the multimesh.
     # [num_mesh_nodes, batch, latent_size]
@@ -562,6 +583,41 @@ class GraphCast(predictor_base.Predictor):
     latent_mesh_nodes = grid2mesh_out.nodes["mesh_nodes"].features
     latent_grid_nodes = grid2mesh_out.nodes["grid_nodes"].features
     return latent_mesh_nodes, latent_grid_nodes
+
+  def _run_mesh2mesh_gnn(self, mesh_input: chex.Array) -> chex.Array:
+    """Runs the mesh_gnn, extracting updated latent mesh nodes."""
+
+    # Add the structural edge features of this graph. Note we don't need
+    # to add the structural node features, because these are already part of
+    # the latent state, via the original Grid2Mesh gnn, however, we need
+    # the edge ones, because it is the first time we are seeing this particular
+    # set of edges.
+    batch_size = mesh_input.shape[1]
+
+    mesh_graph = self._mesh_graph_structure
+    assert mesh_graph is not None
+    mesh_edges_key = mesh_graph.edge_key_by_name("mesh")
+    edges = mesh_graph.edges[mesh_edges_key]
+
+    # We are assuming here that the mesh gnn uses a single set of edge keys
+    # named "mesh" for the edges and that it uses a single set of nodes named
+    # "mesh_nodes"
+    msg = ("The setup currently requires to only have one kind of edge in the"
+           " mesh GNN.")
+    assert len(mesh_graph.edges) == 1, msg
+
+    new_edges = edges._replace(
+        features=_add_batch_second_axis(
+            edges.features.astype(mesh_input.dtype), batch_size))
+
+    nodes = mesh_graph.nodes["mesh_nodes"]
+    nodes = nodes._replace(features=mesh_input)
+
+    input_graph = mesh_graph._replace(
+        edges={mesh_edges_key: new_edges}, nodes={"mesh_nodes": nodes})
+
+    # Run the GNN.
+    return self._mesh2mesh_gnn(input_graph).nodes["mesh_nodes"].features
 
   def _run_mesh_gnn(self, latent_mesh_nodes: chex.Array) -> chex.Array:
     """Runs the mesh_gnn, extracting updated latent mesh nodes."""

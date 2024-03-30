@@ -16,7 +16,7 @@
 from typing import Mapping
 
 from graphcast import xarray_tree
-import numpy as np
+from jax import numpy as jnp
 from typing_extensions import Protocol
 import xarray
 
@@ -58,43 +58,13 @@ def weighted_mse(
     targets: xarray.Dataset,
     per_variable_weights: Mapping[str, float],
 ) -> LossAndDiagnostics:
-  """Latitude- and pressure-level-weighted MSE loss."""
-  def loss(prediction, target):
-    prediction = prediction.fillna(0)
-    target = target.fillna(0)
-    loss = (prediction - target)**2
-    return _mean_preserving_batch(loss)
 
-  losses = xarray_tree.map_structure(loss, predictions, targets)
-  return sum_per_variable_losses(losses, per_variable_weights)
+  loss = (predictions.elev - targets.elev)**2
+  loss = loss.mean(["time", "node"])
 
+ #def debug_callback(predictions, targets, loss):
+ #    import pdb; pdb.set_trace()
+ #import jax
+ #jax.debug.callback(debug_callback, predictions, targets, loss)
 
-def _mean_preserving_batch(x: xarray.DataArray) -> xarray.DataArray:
-  return x.mean([d for d in x.dims if d != 'batch'], skipna=False)
-
-
-def sum_per_variable_losses(
-    per_variable_losses: Mapping[str, xarray.DataArray],
-    weights: Mapping[str, float],
-) -> LossAndDiagnostics:
-  """Weighted sum of per-variable losses."""
-  if not set(weights.keys()).issubset(set(per_variable_losses.keys())):
-    raise ValueError(
-        'Passing a weight that does not correspond to any variable '
-        f'{set(weights.keys())-set(per_variable_losses.keys())}')
-
-  weighted_per_variable_losses = {
-      name: loss * weights.get(name, 1)
-      for name, loss in per_variable_losses.items()
-  }
-  total = xarray.concat(
-      weighted_per_variable_losses.values(), dim='variable', join='exact').sum(
-          'variable', skipna=False)
-  return total, per_variable_losses  # pytype: disable=bad-return-type
-
-
-def _check_uniform_spacing_and_get_delta(vector):
-  diff = np.diff(vector)
-  if not np.all(np.isclose(diff[0], diff)):
-    raise ValueError(f'Vector {diff} is not uniformly spaced.')
-  return diff[0]
+  return loss, dict(elev=loss)
