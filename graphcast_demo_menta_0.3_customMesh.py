@@ -29,7 +29,7 @@ import numpy as np
 import xarray
 
 # should ensure that memory is deallocated when the buffers are released in the GPU
-os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+#os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 
 def parse_file_parts(file_name):
@@ -44,15 +44,20 @@ print("creating/loading model_config and task_config")
 
 # very coarse model to test on my laptop
 # PUT BACK LATENT SIZE TO 512, I PUT IT TO 256 FOR MEMORY CONSTRAINT
-model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=128, gnn_msg_steps=16, hidden_layers=1, 
-        radius_query_fraction_edge_length=0.6, mesh2grid_edge_normalization_factor=0.6180338738074472,
+
+#model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=96, gnn_msg_steps=16, hidden_layers=1, 
+#        radius_query_fraction_edge_length=2, mesh2grid_edge_normalization_factor=0.6180338738074472,
+#        mesh_file_path='./data/graphcastStormSurgeAdriaticSea/util/adriatic.gr3')
+
+model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=96, gnn_msg_steps=16, hidden_layers=1, 
+        radius_query_fraction_edge_length=4, mesh2grid_edge_normalization_factor=0.6180338738074472,
         mesh_file_path='./data/graphcastStormSurgeAdriaticSea/util/adriatic.gr3')
 
 task_config = graphcast.TaskConfig(
                 input_variables=['elev'], 
                 target_variables=['elev'], 
                 forcing_variables=('u10', 'v10', 'sp'),
-                input_duration='3h')
+                input_duration='12h')
               
 
 params = None # params must be initialized
@@ -93,19 +98,23 @@ stddev_by_level = xarray.open_dataset(stddevByLevelFilePath)
 
 print("extracting training and testing sets")
 
-train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
-    example_batch_grid, example_batch_mesh, target_lead_times=slice("0h", "88h"),
-    **dataclasses.asdict(task_config))
+ntimestep = 28
 
-# test with just 1 time step
+train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
+    example_batch_grid, example_batch_mesh, target_lead_times=slice("0h", "81h"),
+    **dataclasses.asdict(task_config))
+ 
+## test with a few time steps
 #train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
-#    example_batch_grid, example_batch_mesh, target_lead_times=slice("0h", "0h"),
+#    example_batch_grid, example_batch_mesh, target_lead_times=slice("0h", "9h"),
 #    **dataclasses.asdict(task_config))
 
+#import debugPlotElev
+#debugPlotElev.plotMapAtTime(train_targets)
 
-eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
-    example_batch_grid, example_batch_mesh, target_lead_times=slice("88h", "96h"),
-    **dataclasses.asdict(task_config))
+#eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
+#    example_batch_grid, example_batch_mesh, target_lead_times=slice("88h", "96h"),
+#    **dataclasses.asdict(task_config))
 
 
 
@@ -137,9 +146,14 @@ def construct_wrapped_graphcast(
 
 
 @hk.transform_with_state
-def run_forward(model_config, task_config, inputs, targets_template, forcings):
+def run_forward_hk(model_config, task_config, inputs, targets_template, forcings):
   predictor = construct_wrapped_graphcast(model_config, task_config)
   return predictor(inputs, targets_template=targets_template, forcings=forcings)
+
+
+def run_forward(params, state, rng, model_config, task_config, inputs, targets_template, forcings):
+  return run_forward_hk.apply(params, state, rng, model_config, task_config, 
+            inputs, targets_template, forcings)
 
 
 @hk.transform_with_state
@@ -186,7 +200,7 @@ def with_params(fn):
 def drop_state(fn):
   return lambda **kw: fn(**kw)[0]
 
-init_jitted = jax.jit(with_configs(run_forward.init))
+init_jitted = jax.jit(with_configs(run_forward_hk.init))
 if params is None:
   params, state = init_jitted(
       rng=jax.random.PRNGKey(0),
@@ -202,8 +216,9 @@ print("training")
 print("  getting the functions for computing the loss, the backpropagation, the forward step")
 loss_fn_jitted = drop_state(with_params(jax.jit(with_configs(loss_fn.apply))))
 grads_fn_jitted = jax.jit(with_configs(grads_fn))
-run_forward_jitted = drop_state(with_params(jax.jit(with_configs(
-    run_forward.apply))))
+#run_forward_jitted = drop_state(with_params(jax.jit(with_configs(
+#    run_forward.apply))))
+run_forward_jitted = jax.jit(with_configs(run_forward))
 
 print("  creating the optimizer")
 lr = 1e-3
@@ -211,8 +226,10 @@ optimiser = optax.adam(lr, b1=0.9, b2=0.999, eps=1e-8)
 opt_state = optimiser.init(params)
 
 # training loop
-nepochs = 40
+nepochs = 7000
+nepochs = 1000
 #nepochs = 2
+#nepochs = 100
 jitted = True
 for iepoch in range(nepochs):
     print(f"epoch {iepoch}")
@@ -225,20 +242,30 @@ for iepoch in range(nepochs):
     # optimizer step
     updates, opt_state = optimiser.update(grads, opt_state)
     params = optax.apply_updates(params, updates)
+    state = next_state # though this is {} in my test
     
     mean_grad = np.mean(jax.tree_util.tree_flatten(jax.tree_util.tree_map(lambda x: np.abs(x).mean(), grads))[0])
 
     print(f"Loss: {loss:.4f}, Mean |grad|: {mean_grad:.6f}")
+
+    if loss < .08:
+        break
     
 print("  autoregressive rollout (forward step)")
 # @title Autoregressive rollout (keep the loop in JAX)
 predictions = run_forward_jitted(
+    params=params,
+    state=state,
     rng=jax.random.PRNGKey(0),
     inputs=train_inputs,
     targets_template=train_targets * np.nan,
     forcings=train_forcings)
 
-predictions
+predictions = predictions[0]
+predictions["x"] = example_batch_mesh.lon
+predictions["y"] = example_batch_mesh.lat
+predictions["time"] = example_batch_mesh.time.isel(dict(time=slice(-ntimestep, None)))
+predictions.to_netcdf("predictions.nc")
     
 print("Inputs:  ", train_inputs.dims.mapping)
 print("Targets: ", train_targets.dims.mapping)
