@@ -250,23 +250,31 @@ class GraphCast(predictor_base.Predictor):
     )
 
     # feature learning of the input loaded from the unstructured mesh
-    mesh_gnn_latent_size = 8
-    self._mesh2mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
-        embed_nodes=False,  # Node features already embdded by previous layers.
-        embed_edges=True,  # Embed raw features of the multi-mesh edges.
-        node_latent_size=dict(mesh_nodes=mesh_gnn_latent_size),
-        edge_latent_size=dict(mesh=mesh_gnn_latent_size),
-        mlp_hidden_size=mesh_gnn_latent_size,
-        mlp_num_hidden_layers=model_config.hidden_layers,
-        num_message_passing_steps=model_config.gnn_msg_steps,
-        use_layer_norm=True,
-        include_sent_messages_in_node_update=False,
-        activation="sigmoid",
-        f32_aggregation=False,
-        name="mesh2mesh_gnn",
-    )
+    mesh_gnn_latent_size = 32
+    if mesh_gnn_latent_size > 0:
+      self._mesh2mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
+          embed_nodes=True,  # Node features already embdded by previous layers.
+          embed_edges=True,  # Embed raw features of the multi-mesh edges.
+          node_latent_size=dict(mesh_nodes=mesh_gnn_latent_size),
+          edge_latent_size=dict(mesh=mesh_gnn_latent_size),
+          mlp_hidden_size=mesh_gnn_latent_size,
+          mlp_num_hidden_layers=model_config.hidden_layers,
+          num_message_passing_steps=model_config.gnn_msg_steps,
+          use_layer_norm=True,
+          include_sent_messages_in_node_update=False,
+         #activation="swish",
+          activation="sigmoid",
+         #activation="leaky_relu",
+         #activation="gelu",
+          f32_aggregation=False,
+          name="mesh2mesh_gnn",
+      )
+    else:
+      self._mesh2mesh_gnn = None
 
     # Processor, which performs message passing on the multi-mesh.
+  # if mesh_gnn_latent_size == 0:
+  #     mesh_gnn_latent_size = 1
     mesh_gnn_latent_size = model_config.latent_size + mesh_gnn_latent_size
     self._mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
         embed_nodes=False,  # Node features already embdded by previous layers.
@@ -275,7 +283,7 @@ class GraphCast(predictor_base.Predictor):
         edge_latent_size=dict(mesh=mesh_gnn_latent_size),
         node_output_size=dict(mesh_nodes=len(task_config.target_variables)),
         mlp_hidden_size=mesh_gnn_latent_size,
-        mlp_num_hidden_layers=model_config.hidden_layers,
+        mlp_num_hidden_layers=model_config.hidden_layers+1,
         num_message_passing_steps=model_config.gnn_msg_steps,
         use_layer_norm=True,
         include_sent_messages_in_node_update=False,
@@ -336,8 +344,11 @@ class GraphCast(predictor_base.Predictor):
      ) = self._run_grid2mesh_gnn(grid_node_features)
 
     # mesh 2 mesh graph network, for feature learning on the mesh input
-    latent_mesh_input_features = self._run_mesh2mesh_gnn(input_node_features)
-    latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, latent_mesh_input_features], 2)
+    if not self._mesh2mesh_gnn is None:
+      latent_mesh_input_features = self._run_mesh2mesh_gnn(input_node_features)
+      latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, latent_mesh_input_features], 2)
+    else:
+      latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, input_node_features], 2)
 
     # Run message passing in the multimesh.
     # [num_mesh_nodes, batch, latent_size]
