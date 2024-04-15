@@ -49,15 +49,16 @@ print("creating/loading model_config and task_config")
 #        radius_query_fraction_edge_length=2, mesh2grid_edge_normalization_factor=0.6180338738074472,
 #        mesh_file_path='./data/graphcastStormSurgeAdriaticSea/util/adriatic.gr3')
 
-model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=96, gnn_msg_steps=16, hidden_layers=1, 
+model_config = graphcast.ModelConfig(resolution=1.0, mesh_size=4, latent_size=48, gnn_msg_steps=16, hidden_layers=1, 
         radius_query_fraction_edge_length=4, mesh2grid_edge_normalization_factor=0.6180338738074472,
-        mesh_file_path='./data/graphcastStormSurgeAdriaticSea/util/adriatic.gr3')
+        mesh_file_path='./data/graphcastStormSurgeAdriaticSea/util/adriatic.gr3',
+        n_input_time_step=8)
 
 task_config = graphcast.TaskConfig(
                 input_variables=['elev'], 
                 target_variables=['elev'], 
                 forcing_variables=('u10', 'v10', 'sp'),
-                input_duration='12h')
+                input_duration='24h')
               
 
 params = None # params must be initialized
@@ -98,10 +99,10 @@ stddev_by_level = xarray.open_dataset(stddevByLevelFilePath)
 
 print("extracting training and testing sets")
 
-ntimestep = 28
+ntimestep = 8
 
 train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
-    example_batch_grid, example_batch_mesh, target_lead_times=slice("0h", "81h"),
+    example_batch_grid, example_batch_mesh, target_lead_times=slice("0h", "21h"),
     **dataclasses.asdict(task_config))
  
 ## test with a few time steps
@@ -221,13 +222,16 @@ grads_fn_jitted = jax.jit(with_configs(grads_fn))
 run_forward_jitted = jax.jit(with_configs(run_forward))
 
 print("  creating the optimizer")
-lr = 1e-3
+lr = 1e-4
+nepochs = 4000
+scheduler = optax.cosine_onecycle_schedule(transition_steps=1000, peak_value=lr, pct_start=.05, div_factor=10, final_div_factor=20)
 optimiser = optax.adam(lr, b1=0.9, b2=0.999, eps=1e-8)
+optimizer = optax.chain(
+    optax.scale_by_adam(),   # Apply Adam updates
+    optax.scale_by_schedule(scheduler)  # Scale updates according to the scheduler
+)
 opt_state = optimiser.init(params)
 
-# training loop
-nepochs = 7000
-nepochs = 1000
 #nepochs = 2
 #nepochs = 100
 jitted = True
@@ -246,9 +250,11 @@ for iepoch in range(nepochs):
     
     mean_grad = np.mean(jax.tree_util.tree_flatten(jax.tree_util.tree_map(lambda x: np.abs(x).mean(), grads))[0])
 
-    print(f"Loss: {loss:.4f}, Mean |grad|: {mean_grad:.6f}")
+    current_lr = scheduler(iepoch)
+   #current_lr = lr
+    print(f"Loss: {loss:.4f}, Mean |grad|: {mean_grad:.6f}, Learning rate: {current_lr}")
 
-    if loss < .08:
+    if loss <= .01:
         break
     
 print("  autoregressive rollout (forward step)")

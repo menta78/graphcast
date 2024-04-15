@@ -60,7 +60,7 @@ def weighted_mse(
 ) -> LossAndDiagnostics:
 
   loss = (predictions.elev - targets.elev)**2
-  loss = loss.mean(["time", "node"])**.5
+  loss = loss.mean(["time", "node"])
 
  #def debug_callback(predictions, targets, loss):
  #    import pdb; pdb.set_trace()

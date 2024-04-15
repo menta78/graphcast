@@ -119,31 +119,6 @@ class TaskConfig:
   forcing_variables: tuple[str, ...]
   input_duration: str
 
-TASK = TaskConfig(
-    input_variables=(
-        TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS + FORCING_VARS +
-        STATIC_VARS),
-    target_variables=TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS,
-    forcing_variables=FORCING_VARS,
-    input_duration="12h",
-)
-TASK_13 = TaskConfig(
-    input_variables=(
-        TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS + FORCING_VARS +
-        STATIC_VARS),
-    target_variables=TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS,
-    forcing_variables=FORCING_VARS,
-    input_duration="12h",
-)
-TASK_13_PRECIP_OUT = TaskConfig(
-    input_variables=(
-        TARGET_SURFACE_NO_PRECIP_VARS + TARGET_ATMOSPHERIC_VARS + FORCING_VARS +
-        STATIC_VARS),
-    target_variables=TARGET_SURFACE_VARS + TARGET_ATMOSPHERIC_VARS,
-    forcing_variables=FORCING_VARS,
-    input_duration="12h",
-)
-
 
 @chex.dataclass(frozen=True, eq=True)
 class ModelConfig:
@@ -173,6 +148,7 @@ class ModelConfig:
   hidden_layers: int
   radius_query_fraction_edge_length: float
   mesh_file_path: str
+  n_input_time_step: int
   mesh2grid_edge_normalization_factor: Optional[float] = None
 
 
@@ -250,7 +226,7 @@ class GraphCast(predictor_base.Predictor):
     )
 
     # feature learning of the input loaded from the unstructured mesh
-    mesh_gnn_latent_size = 32
+    mesh_gnn_latent_size = 16
     if mesh_gnn_latent_size > 0:
       self._mesh2mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
           embed_nodes=True,  # Node features already embdded by previous layers.
@@ -259,11 +235,12 @@ class GraphCast(predictor_base.Predictor):
           edge_latent_size=dict(mesh=mesh_gnn_latent_size),
           mlp_hidden_size=mesh_gnn_latent_size,
           mlp_num_hidden_layers=model_config.hidden_layers,
-          num_message_passing_steps=model_config.gnn_msg_steps,
+         #num_message_passing_steps=model_config.gnn_msg_steps,
+          num_message_passing_steps=1,
           use_layer_norm=True,
           include_sent_messages_in_node_update=False,
-         #activation="swish",
-          activation="sigmoid",
+          activation="swish",
+         #activation="sigmoid",
          #activation="leaky_relu",
          #activation="gelu",
           f32_aggregation=False,
@@ -275,7 +252,8 @@ class GraphCast(predictor_base.Predictor):
     # Processor, which performs message passing on the multi-mesh.
   # if mesh_gnn_latent_size == 0:
   #     mesh_gnn_latent_size = 1
-    mesh_gnn_latent_size = model_config.latent_size + mesh_gnn_latent_size
+    mesh_gnn_latent_size = model_config.latent_size + mesh_gnn_latent_size + model_config.n_input_time_step
+   #mesh_gnn_latent_size = model_config.latent_size + mesh_gnn_latent_size
     self._mesh_gnn = deep_typed_graph_net.DeepTypedGraphNet(
         embed_nodes=False,  # Node features already embdded by previous layers.
         embed_edges=True,  # Embed raw features of the multi-mesh edges.
@@ -283,7 +261,7 @@ class GraphCast(predictor_base.Predictor):
         edge_latent_size=dict(mesh=mesh_gnn_latent_size),
         node_output_size=dict(mesh_nodes=len(task_config.target_variables)),
         mlp_hidden_size=mesh_gnn_latent_size,
-        mlp_num_hidden_layers=model_config.hidden_layers+1,
+        mlp_num_hidden_layers=model_config.hidden_layers,
         num_message_passing_steps=model_config.gnn_msg_steps,
         use_layer_norm=True,
         include_sent_messages_in_node_update=False,
@@ -348,7 +326,8 @@ class GraphCast(predictor_base.Predictor):
       latent_mesh_input_features = self._run_mesh2mesh_gnn(input_node_features)
       latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, latent_mesh_input_features], 2)
     else:
-      latent_mesh_nodes = jnp.concatenate([latent_mesh_forcing_features, input_node_features], 2)
+      latent_mesh_nodes = latent_mesh_forcing_features
+    latent_mesh_nodes = jnp.concatenate([latent_mesh_nodes, input_node_features], 2)
 
     # Run message passing in the multimesh.
     # [num_mesh_nodes, batch, latent_size]
